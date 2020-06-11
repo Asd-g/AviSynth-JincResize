@@ -50,6 +50,7 @@ class JincResize : public GenericVideoFilter
     bool avx2, sse41;
     int planecount;
     bool has_at_least_v8;
+    float peak;
 
     template<typename T>
     void process_uint(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept;
@@ -58,6 +59,10 @@ class JincResize : public GenericVideoFilter
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
+    int __stdcall SetCacheHints(int cachehints, int frame_range)
+    {
+        return cachehints == CACHE_GET_MTMODE ? MT_MULTI_INSTANCE : 0;
+    }
     ~JincResize();
 };
 

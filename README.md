@@ -63,8 +63,9 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     
 - blur (JincResize only)\
     Blur processing, it can reduce side effects.\
-    To achieve blur, the value should less than 1.\
-    Default: 1.0.
+    To achieve blur, the value should more than 0.0.\
+    Must be between 0.0 and 10.0.
+    Default: 0.0.
     
 - opt (JincResize only)\
     Controls the used CPU optimizations.\

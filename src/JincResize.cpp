@@ -376,8 +376,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
             meta->start_y = window_begin_y;
 
             // Quantize xpos and ypos
-            const int quantized_x_int = static_cast<int>(lround(static_cast<double>(xpos) * quantize_x));
-            const int quantized_y_int = static_cast<int>(lround(static_cast<double>(ypos) * quantize_y));
+            const int quantized_x_int = lrint(static_cast<double>(xpos) * quantize_x);
+            const int quantized_y_int = lrint(static_cast<double>(ypos) * quantize_y);
             const int quantized_x_value = quantized_x_int % quantize_x;
             const int quantized_y_value = quantized_y_int % quantize_y;
             const float quantized_xpos = static_cast<float>(quantized_x_int) / quantize_x;
@@ -477,7 +477,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 //#pragma intel optimization_parameter target_arch=sse
 template<typename T>
 static void resize_plane_c(EWAPixelCoeff* coeff, const T* srcp, T* VS_RESTRICT dstp,
-    int dst_width, int dst_height, int src_stride, int dst_stride)
+    int dst_width, int dst_height, int src_stride, int dst_stride, float peak)
 {
     EWAPixelCoeffMeta* meta = coeff->meta;
 
@@ -499,7 +499,7 @@ static void resize_plane_c(EWAPixelCoeff* coeff, const T* srcp, T* VS_RESTRICT d
                 src_ptr += src_stride;
             }
 
-            dstp[x] = static_cast<T>(round(result));
+            dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
 
             meta++;
         }
@@ -564,7 +564,7 @@ void JincResize::process_uint(PVideoFrame& src, PVideoFrame& dst, const JincResi
         else if (sse41)
             resize_plane_sse<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
         else
-            resize_plane_c<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
+            resize_plane_c<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
     }
 }
 
@@ -611,6 +611,9 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (_opt > 2)
         env->ThrowError("JincResize: opt higher than 2 is not allowed.");
 
+    if (blur < 0.0 || blur > 10.0)
+        env->ThrowError("JincResize: blur must be between 0.0..10.0.");
+
     if (!(env->GetCPUFlags() & CPUF_AVX2) && _opt == 2)
         env->ThrowError("JincResize: opt=2 requires AVX2.");
 
@@ -632,6 +635,10 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
     vi.width = w;
     vi.height = h;
+
+    blur = 1.0 - blur / 100.0;
+
+    peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
 
     double radius = jinc_zeros[tap - 1];
 
@@ -714,14 +721,14 @@ AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnviro
         args[0].AsClip(),
         args[1].AsInt(),
         args[2].AsInt(),
-        args[3].AsFloatf(0),
-        args[4].AsFloatf(0),
-        args[5].AsFloatf(static_cast<float>(vi.width)),
-        args[6].AsFloatf(static_cast<float>(vi.height)),
+        args[3].AsFloat(0),
+        args[4].AsFloat(0),
+        args[5].AsFloat(static_cast<float>(vi.width)),
+        args[6].AsFloat(static_cast<float>(vi.height)),
         args[7].AsInt(256),
         args[8].AsInt(256),
         args[9].AsInt(3),
-        args[10].AsFloatf(1),
+        args[10].AsFloat(0),
         args[11].AsInt(-1),
         env);
 }
