@@ -3,7 +3,8 @@
 Jinc (EWA Lanczos) resampling plugin for AviSynth 2.6 / AviSynth+.
 
 This is [a port of the VapourSynth plugin JincResize](https://github.com/Kiyamou/VapourSynth-JincResize).
-SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize][https://github.com/AviSynth/jinc-resize].
+
+SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize](https://github.com/AviSynth/jinc-resize).
 
 # Usage
 
@@ -11,7 +12,7 @@ SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize][https://g
 JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", int "opt")
 ```
 
-There are 4 additional functions:
+##### There are 4 additional functions:
     Jinc36Resize is an alias for JincResize(tap=3).
     Jinc64Resize is an alias for JincResize(tap=4).
     Jinc144Resize is an alias for JincResize(tap=6).
@@ -52,12 +53,12 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     
 - quant_x, quant_y\
     Controls the sub-pixel quantization.\
-    Must be between 1 and 256.
+    Must be between 1 and 256.\
     Default: 256.
     
 - tap (JincResize only)\
     Corresponding to different zero points of Jinc function.\
-    Must be between 1 and 16.
+    Must be between 1 and 16.\
     Default: 3.
     
 - blur (JincResize only)\
