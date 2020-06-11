@@ -150,7 +150,7 @@ void resize_plane_avx_float(EWAPixelCoeff* coeff, const float* src, float* VS_RE
             result = _mm256_hadd_ps(result, zero_ps);
 
             // Save data
-            _mm256_store_ps(reinterpret_cast<float*>(dst + x), result);
+            _mm256_storeu_ps(reinterpret_cast<float*>(dst + x), result);
 
             meta++;
         } // for (x)

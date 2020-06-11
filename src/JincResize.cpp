@@ -316,8 +316,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     const float filter_support = max(filter_support_x, filter_support_y);
     const int filter_size = max(filter_size_x, filter_size_y);
 
-    const float start_x = static_cast<float>(crop_left + (crop_width - dst_width)) / (dst_width * static_cast<int64_t>(2));
-    const float start_y = static_cast<float>(crop_top + (crop_height - dst_height)) / (dst_height * static_cast<int64_t>(2));
+    const float start_x = static_cast<float>(crop_left + (crop_width - dst_width) / (dst_width * static_cast<int64_t>(2)));
+    const float start_y = static_cast<float>(crop_top + (crop_height - dst_height) / (dst_height * static_cast<int64_t>(2)));
 
     const float x_step = static_cast<float>(crop_width / dst_width);
     const float y_step = static_cast<float>(crop_height / dst_height);
@@ -593,14 +593,20 @@ void JincResize::process_float(PVideoFrame& src, PVideoFrame& dst, const JincRes
     }
 }
 
-JincResize::JincResize(PClip _child, int width, int height, int tap, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, double blur, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), w(width), h(height), _opt(opt)
+JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env)
+    : GenericVideoFilter(_child), w(target_width), h(target_height), _opt(opt)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
 
     if (tap < 1 || tap > 16)
-        env->ThrowError("JincResize: tap must be in the range of 1-16.");
+        env->ThrowError("JincResize: tap must be between 1..16.");
+
+    if (quant_x < 1 || quant_x > 256)
+        env->ThrowError("JincResize: quant_x must be between 1..256.");
+
+    if (quant_y < 1 || quant_y > 256)
+        env->ThrowError("JincResize: quant_y must be between 1..256.");
 
     if (_opt > 2)
         env->ThrowError("JincResize: opt higher than 2 is not allowed.");
@@ -611,8 +617,19 @@ JincResize::JincResize(PClip _child, int width, int height, int tap, double crop
     if (!(env->GetCPUFlags() & CPUF_SSE4_1) && _opt == 1)
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
 
+    has_at_least_v8 = true;
+    try { env->CheckVersion(8); }
+    catch (const AvisynthError&) { has_at_least_v8 = false; };
+
     int src_width = vi.width;
     int src_height = vi.height;
+
+    if (crop_width <= 0.0)
+        crop_width = vi.width - crop_left + crop_width;
+
+    if (crop_height <= 0.0)
+        crop_height = vi.height - crop_top + crop_height;
+
     vi.width = w;
     vi.height = h;
 
@@ -643,7 +660,7 @@ JincResize::JincResize(PClip _child, int width, int height, int tap, double crop
     {
         out[i] = new EWAPixelCoeff();
 
-        if (vi.IsYUV() || vi.IsY())
+        if ((vi.IsYUV() || vi.IsYUVA()) && !vi.Is444())
         {
             if (i == 0)
                 generate_coeff_table_c(init_lut, out[0], quantize_x, quantize_y, samples, src_width, src_height,
@@ -676,7 +693,8 @@ JincResize::~JincResize()
 PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
 {
     PVideoFrame src = child->GetFrame(n, env);
-    PVideoFrame dst = env->NewVideoFrame(vi);
+    PVideoFrame dst;
+    if (has_at_least_v8) dst = env->NewVideoFrameP(vi, &src); else dst = env->NewVideoFrame(vi);
 
     if (vi.ComponentSize() == 1)
         process_uint<uint8_t>(src, dst, 0, env);
@@ -688,7 +706,7 @@ PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
     return dst;
 }
 
-AVSValue __cdecl Create_JinResize(AVSValue args, void* user_data, IScriptEnvironment* env)
+AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
     const VideoInfo& vi = args[0].AsClip()->GetVideoInfo();
 
@@ -696,16 +714,47 @@ AVSValue __cdecl Create_JinResize(AVSValue args, void* user_data, IScriptEnviron
         args[0].AsClip(),
         args[1].AsInt(),
         args[2].AsInt(),
-        args[3].AsInt(3),
+        args[3].AsFloatf(0),
         args[4].AsFloatf(0),
-        args[5].AsFloatf(0),
-        args[6].AsFloatf(static_cast<float>(vi.width)),
-        args[7].AsFloatf(static_cast<float>(vi.height)),
+        args[5].AsFloatf(static_cast<float>(vi.width)),
+        args[6].AsFloatf(static_cast<float>(vi.height)),
+        args[7].AsInt(256),
         args[8].AsInt(256),
-        args[9].AsInt(256),
-        args[10].AsFloatf(0.9812505644269356),
+        args[9].AsInt(3),
+        args[10].AsFloatf(1),
         args[11].AsInt(-1),
         env);
+}
+
+static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx = 3)
+{
+    out_args->add(args[0]);
+    out_args->add(args[1]);
+    out_args->add(args[2]);
+
+    if (args[src_left_idx + 0].Defined())
+        out_args->add(args[src_left_idx + 0], "src_left");
+    if (args[src_left_idx + 1].Defined())
+        out_args->add(args[src_left_idx + 1], "src_top");
+    if (args[src_left_idx + 2].Defined())
+        out_args->add(args[src_left_idx + 2], "src_width");
+    if (args[src_left_idx + 3].Defined())
+        out_args->add(args[src_left_idx + 3], "src_height");
+    if (args[src_left_idx + 0].Defined())
+        out_args->add(args[src_left_idx + 4], "quant_x");
+    if (args[src_left_idx + 1].Defined())
+        out_args->add(args[src_left_idx + 5], "quant_y");
+}
+
+template <int taps>
+AVSValue __cdecl resizer_jinc36resize(AVSValue args, void* user_data, IScriptEnvironment* env)
+{
+    Arguments mapped_args;
+
+    resizer(args, &mapped_args);
+    mapped_args.add(args[9].AsInt(taps), "tap");
+
+    return env->Invoke("JincResize", mapped_args.args(), mapped_args.arg_names()).AsClip();
 }
 
 const AVS_Linkage* AVS_linkage;
@@ -715,6 +764,12 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 {
     AVS_linkage = vectors;
 
-    env->AddFunction("JincResize", "c[width]i[height]i[tap]i[crop_left]f[crop_top]f[crop_width]f[crop_height]f[quant_x]i[quant_y]i[blur]f[opt]i", Create_JinResize, 0);
+    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[opt]i", Create_JincResize, 0);
+
+    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<3>, 0);
+    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<4>, 0);
+    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<6>, 0);
+    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<8>, 0);
+
     return "JincResize";
 }

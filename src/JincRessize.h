@@ -49,15 +49,37 @@ class JincResize : public GenericVideoFilter
     EWAPixelCoeff* out[3]{};
     bool avx2, sse41;
     int planecount;
+    bool has_at_least_v8;
 
     template<typename T>
     void process_uint(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept;
     void process_float(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept;
 
 public:
-    JincResize(PClip _child, int width, int height, int tap, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, double blur, int opt, IScriptEnvironment* env);
+    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     ~JincResize();
+};
+
+class Arguments
+{
+    AVSValue _args[12];
+    const char* _arg_names[12];
+    int _idx;
+
+public:
+    Arguments() : _args{}, _arg_names{}, _idx{} {}
+
+    void add(AVSValue arg, const char* arg_name = nullptr)
+    {
+        _args[_idx] = arg;
+        _arg_names[_idx] = arg_name;
+        ++_idx;
+    }
+
+    AVSValue args() const { return{ _args, _idx }; }
+
+    const char* const* arg_names() const { return _arg_names; }
 };
 
 #endif

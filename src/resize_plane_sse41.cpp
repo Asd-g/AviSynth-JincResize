@@ -3,12 +3,12 @@
 #include "JincRessize.h"
 
 template <typename T>
-#if defined(CLANG) || defined(GCC)
-__attribute__((__target__("sse4.1")))
-#endif
 void resize_plane_sse(EWAPixelCoeff* coeff, const T* src, T* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch) {};
 
 template<>
+#if defined(CLANG) || defined(GCC)
+__attribute__((__target__("sse4.1")))
+#endif
 void resize_plane_sse<uint8_t>(EWAPixelCoeff* coeff, const uint8_t* src, uint8_t* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch)
 {
     EWAPixelCoeffMeta* meta = coeff->meta;
@@ -61,6 +61,9 @@ void resize_plane_sse<uint8_t>(EWAPixelCoeff* coeff, const uint8_t* src, uint8_t
 }
 
 template<>
+#if defined(CLANG) || defined(GCC)
+__attribute__((__target__("sse4.1")))
+#endif
 void resize_plane_sse<uint16_t>(EWAPixelCoeff* coeff, const uint16_t* src, uint16_t* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch)
 {
     EWAPixelCoeffMeta* meta = coeff->meta;
@@ -152,7 +155,7 @@ void resize_plane_sse_float(EWAPixelCoeff* coeff, const float* src, float* VS_RE
             result = _mm_add_ss(result1, result2);
 
             // Save data
-            _mm_store_ps(reinterpret_cast<float*>(dst + x), result);
+            _mm_storeu_ps(reinterpret_cast<float*>(dst + x), result);
 
             meta++;
         } // for (x)
