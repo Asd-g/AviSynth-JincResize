@@ -35,11 +35,11 @@ public:
 };
 
 template <typename T>
-void resize_plane_sse(EWAPixelCoeff* coeff, const T* src, T* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-void resize_plane_sse_float(EWAPixelCoeff* coeff, const float* src, float* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch);
+void resize_plane_sse41(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
 template <typename T>
-void resize_plane_avx(EWAPixelCoeff* coeff, const T* src, T* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-void resize_plane_avx_float(EWAPixelCoeff* coeff, const float* src, float* VS_RESTRICT dst, int dst_width, int dst_height, int src_pitch, int dst_pitch);
+void resize_plane_avx2(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
+template <typename T>
+void resize_plane_avx512(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
 
 class JincResize : public GenericVideoFilter
 {
@@ -47,14 +47,12 @@ class JincResize : public GenericVideoFilter
     int _opt;
     Lut* init_lut;
     EWAPixelCoeff* out[3]{};
-    bool avx2, sse41;
+    bool avx512, avx2, sse41;
     int planecount;
     bool has_at_least_v8;
     float peak;
 
-    template<typename T>
-    void process_uint(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept;
-    void process_float(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept;
+    void(*process_frame)(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
 
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env);

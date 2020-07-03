@@ -24,6 +24,9 @@
     <ClCompile Include="..\src\resize_plane_sse41.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\resize_plane_avx512.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\JincRessize.h">

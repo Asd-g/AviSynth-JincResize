@@ -476,10 +476,16 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 /* 8-16 bit */
 //#pragma intel optimization_parameter target_arch=sse
 template<typename T>
-static void resize_plane_c(EWAPixelCoeff* coeff, const T* srcp, T* VS_RESTRICT dstp,
+static void resize_plane_c(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_,
     int dst_width, int dst_height, int src_stride, int dst_stride, float peak)
 {
     EWAPixelCoeffMeta* meta = coeff->meta;
+
+    const T* srcp = reinterpret_cast<const T*>(src_);
+    T* VS_RESTRICT dstp = reinterpret_cast<T*>(dst_);
+
+    src_stride /= sizeof(T);
+    dst_stride /= sizeof(T);
 
     for (int y = 0; y < dst_height; y++)
     {
@@ -489,6 +495,7 @@ static void resize_plane_c(EWAPixelCoeff* coeff, const T* srcp, T* VS_RESTRICT d
             const float* coeff_ptr = coeff->factor + meta->coeff_meta;
 
             float result = 0.f;
+
             for (int ly = 0; ly < coeff->filter_size; ly++)
             {
                 for (int lx = 0; lx < coeff->filter_size; lx++)
@@ -499,97 +506,15 @@ static void resize_plane_c(EWAPixelCoeff* coeff, const T* srcp, T* VS_RESTRICT d
                 src_ptr += src_stride;
             }
 
-            dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
+            if (!(std::is_same_v<T, float>))
+                dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
+            else
+                dstp[x] = result;
 
             meta++;
         }
 
         dstp += dst_stride;
-    }
-}
-
-/* Planar resampling with coeff table */
-/* 32 bit */
-static void resize_plane_c_float(EWAPixelCoeff* coeff, const float* srcp, float* VS_RESTRICT dstp,
-    int dst_width, int dst_height, int src_stride, int dst_stride)
-{
-    EWAPixelCoeffMeta* meta = coeff->meta;
-
-    for (int y = 0; y < dst_height; y++)
-    {
-        for (int x = 0; x < dst_width; x++)
-        {
-            const float* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
-            const float* coeff_ptr = coeff->factor + meta->coeff_meta;
-
-            float result = 0.f;
-            for (int ly = 0; ly < coeff->filter_size; ly++)
-            {
-                for (int lx = 0; lx < coeff->filter_size; lx++)
-                {
-                    result += src_ptr[lx] * coeff_ptr[lx];
-                }
-                coeff_ptr += coeff->coeff_stride;
-                src_ptr += src_stride;
-            }
-
-            dstp[x] = result;
-
-            meta++;
-        }
-
-        dstp += dst_stride;
-    }
-}
-
-template<typename T>
-void JincResize::process_uint(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept
-{
-    int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
-    int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
-    for (int i = 0; i < planecount; i++)
-    {
-        const int plane = current_planes[i];
-
-        int src_stride = src->GetPitch(plane) / sizeof(T);
-        int dst_stride = dst->GetPitch(plane) / sizeof(T);
-        int dst_width = dst->GetRowSize(plane) / vi.ComponentSize();
-        int dst_height = dst->GetHeight(plane);
-        const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
-        T* VS_RESTRICT dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane));
-
-        if (avx2)
-            resize_plane_avx<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
-        else if (sse41)
-            resize_plane_sse<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
-        else
-            resize_plane_c<T>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
-    }
-}
-
-void JincResize::process_float(PVideoFrame& src, PVideoFrame& dst, const JincResize* const VS_RESTRICT, IScriptEnvironment* env) noexcept
-{
-    int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
-    int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
-    for (int i = 0; i < planecount; i++)
-    {
-        const int plane = current_planes[i];
-
-        int src_stride = src->GetPitch(plane) / sizeof(float);
-        int dst_stride = dst->GetPitch(plane) / sizeof(float);
-        int dst_width = dst->GetRowSize(plane) / vi.ComponentSize();
-        int dst_height = dst->GetHeight(plane);
-        const float* srcp = reinterpret_cast<const float*>(src->GetReadPtr(plane));
-        float* VS_RESTRICT dstp = reinterpret_cast<float*>(dst->GetWritePtr(plane));
-
-        if (avx2)
-            resize_plane_avx_float(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
-        else if (sse41)
-            resize_plane_sse_float(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
-        else
-            resize_plane_c_float(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
     }
 }
 
@@ -608,11 +533,14 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (quant_y < 1 || quant_y > 256)
         env->ThrowError("JincResize: quant_y must be between 1..256.");
 
-    if (_opt > 2)
-        env->ThrowError("JincResize: opt higher than 2 is not allowed.");
+    if (_opt > 3)
+        env->ThrowError("JincResize: opt higher than 3 is not allowed.");
 
     if (blur < 0.0 || blur > 10.0)
         env->ThrowError("JincResize: blur must be between 0.0..10.0.");
+
+    if (!(env->GetCPUFlags() & CPUF_AVX512F) && _opt == 3)
+        env->ThrowError("JincResize: opt=2 requires AVX-512F.");
 
     if (!(env->GetCPUFlags() & CPUF_AVX2) && _opt == 2)
         env->ThrowError("JincResize: opt=2 requires AVX2.");
@@ -681,8 +609,37 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
                 w, h, radius, crop_left, crop_top, crop_width, crop_height);
     }
 
-    avx2 = ((env->GetCPUFlags() & CPUF_AVX2) && _opt < 0) || _opt == 2;
-    sse41 = ((env->GetCPUFlags() & CPUF_SSE4_1) && _opt < 0) || _opt == 1;
+    avx512 = (!!(env->GetCPUFlags() & CPUF_AVX512F) && _opt < 0) || _opt == 3;
+    avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && _opt < 0) || _opt == 2;
+    sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && _opt < 0) || _opt == 1;
+
+    if (vi.ComponentSize() == 1)
+    {
+        if (avx512)
+            process_frame = resize_plane_avx512<uint8_t>;
+        else if (avx2)
+            process_frame = resize_plane_avx2<uint8_t>;
+        else
+            process_frame = resize_plane_sse41<uint8_t>;
+    }
+    else if (vi.ComponentSize() == 2)
+    {
+        if (avx512)
+            process_frame = resize_plane_avx512<uint16_t>;
+        else if (avx2)
+            process_frame = resize_plane_avx2<uint16_t>;
+        else
+            process_frame = resize_plane_sse41<uint16_t>;
+     }
+    else
+    {
+        if (avx512)
+            process_frame = resize_plane_avx512<float>;
+        else if (avx2)
+            process_frame = resize_plane_avx2<float>;
+        else
+            process_frame = resize_plane_sse41<float>;
+    }
 }
 
 JincResize::~JincResize()
@@ -703,12 +660,32 @@ PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
     PVideoFrame dst;
     if (has_at_least_v8) dst = env->NewVideoFrameP(vi, &src); else dst = env->NewVideoFrame(vi);
 
-    if (vi.ComponentSize() == 1)
-        process_uint<uint8_t>(src, dst, 0, env);
-    else if (vi.ComponentSize() == 2)
-        process_uint<uint16_t>(src, dst, 0, env);
-    else
-        process_float(src, dst, 0, env);
+    int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
+    int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
+    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
+    for (int i = 0; i < planecount; i++)
+    {
+        const int plane = current_planes[i];
+
+        int src_stride = src->GetPitch(plane);
+        int dst_stride = dst->GetPitch(plane);
+        int dst_width = dst->GetRowSize(plane) / vi.ComponentSize();
+        int dst_height = dst->GetHeight(plane);
+        const uint8_t* srcp = src->GetReadPtr(plane);
+        uint8_t* VS_RESTRICT dstp = dst->GetWritePtr(plane);
+
+        if (!sse41 && !avx2 && !avx512)
+        {
+            if (vi.ComponentSize() == 1)
+                resize_plane_c<uint8_t>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
+            else if (vi.ComponentSize() == 2)
+                resize_plane_c<uint16_t>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
+            else
+                resize_plane_c<float>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
+        }
+        else
+            process_frame(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
+    }
 
     return dst;
 }
