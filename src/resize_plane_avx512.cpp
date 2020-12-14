@@ -5,117 +5,107 @@
 #endif
 
 template <typename T>
-static __forceinline __m512i convert(void const* p)
+void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {
-    return _mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
-}
-
-template <>
-__forceinline __m512i convert<uint16_t>(void const* p)
-{
-    return _mm512_cvtepu16_epi32(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(p)));
-}
-
-template <typename T>
-static __forceinline __m128i pack(const __m128i& x, const __m128i& y)
-{
-    return _mm_packus_epi16(x, y);
-}
-
-template <>
-__forceinline __m128i pack<uint16_t>(const __m128i& x, const __m128i& y)
-{
-    return _mm_packus_epi32(x, y);
-}
-
-template <typename T>
-void resize_plane_avx512(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch)
-{
-    EWAPixelCoeffMeta* meta = coeff->meta;
-
-    const T* src = reinterpret_cast<const T*>(src_);
-    T* VS_RESTRICT dst = reinterpret_cast<T*>(dst_);
-
-    src_pitch /= sizeof(T);
-    dst_pitch /= sizeof(T);
-
-    //  assert(fitler_size == coeff->filter_size);
-
-    for (int y = 0; y < dst_height; y++)
+    const int pixel_size = sizeof(T);
+    const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
+    const int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
+    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
+    for (int i = 0; i < planecount; ++i)
     {
-        for (int x = 0; x < dst_width; x++)
+        const int plane = current_planes[i];
+
+        const int src_stride = src->GetPitch(plane) / pixel_size;
+        const int dst_stride = dst->GetPitch(plane) / pixel_size;
+        const int dst_width = dst->GetRowSize(plane) / pixel_size;
+        const int dst_height = dst->GetHeight(plane);
+        const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
+        T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane));
+        EWAPixelCoeffMeta* meta = coeff[i]->meta;
+        const __m512 min_val = (i && !vi.IsRGB()) ? _mm512_set1_ps(-0.5f) : _mm512_setzero_ps();
+
+        for (int y = 0; y < dst_height; ++y)
         {
-            const T* src_ptr = src + (meta->start_y * static_cast<int64_t>(src_pitch)) + meta->start_x;
-            const float* coeff_ptr = coeff->factor + meta->coeff_meta;
-
-            if (!(std::is_same_v<T, float>))
+            for (int x = 0; x < dst_width; ++x)
             {
+                const T* src_ptr = srcp + (meta->start_y * static_cast<int64_t>(src_stride)) + meta->start_x;
+                const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m512 result = _mm512_setzero_ps();
 
-                for (int ly = 0; ly < coeff->filter_size; ly++)
+                if constexpr (std::is_same_v<T, uint8_t>)
                 {
-                    for (int lx = 0; lx < coeff->filter_size; lx += 16)
+                    for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
-                        __m512 src_ps = _mm512_cvtepi32_ps(convert<T>(src_ptr + lx));
-                        __m512 coeff = _mm512_load_ps(coeff_ptr + lx);
+                        for (int lx = 0; lx < coeff[i]->filter_size; lx += 16)
+                        {
+                            const __m512 src_ps = _mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src_ptr + lx))));
+                            const __m512 coeff = _mm512_load_ps(coeff_ptr + lx);
+                            result = _mm512_fmadd_ps(src_ps, coeff, result);
+                        }
 
-                        result = _mm512_fmadd_ps(src_ps, coeff, result);
+                        coeff_ptr += coeff[i]->coeff_stride;
+                        src_ptr += src_stride;
                     }
 
-                    coeff_ptr += coeff->coeff_stride;
-                    src_ptr += src_pitch;
+                    const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
+                    __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
+                    hsum = _mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum));
+                    const __m128i src_int = _mm_packus_epi16(_mm_packs_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()), _mm_setzero_si128());
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
+
+                    ++meta;
                 }
-
-                __m256 sum_lo = _mm256_hadd_ps(_mm512_castps512_ps256(result), _mm512_castps512_ps256(result));
-                __m128 lo_sum = _mm_add_ss(_mm256_castps256_ps128(_mm256_hadd_ps(sum_lo, sum_lo)), _mm256_extractf128_ps(_mm256_hadd_ps(sum_lo, sum_lo), 1));
-
-                __m256 hi = _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1));
-                __m128 sum_hi = _mm256_extractf128_ps(_mm256_hadd_ps(_mm256_hadd_ps(hi, hi), _mm256_hadd_ps(hi, hi)), 1);
-                __m128 hi_sum = _mm_add_ss(_mm256_castps256_ps128(_mm256_hadd_ps(_mm256_hadd_ps(hi, hi), _mm256_hadd_ps(hi, hi))), sum_hi);
-
-                // Convert back to interger + round + Save data
-                __m128i result_i = _mm_cvtps_epi32(_mm_add_ss(lo_sum, hi_sum));
-
-                dst[x] = _mm_cvtsi128_si32(pack<T>(result_i, _mm_setzero_si128()));
-
-                meta++;
-            }
-            else
-            {
-                __m512 result = _mm512_setzero_ps();
-
-                for (int ly = 0; ly < coeff->filter_size; ly++)
+                else if constexpr (std::is_same_v<T, uint16_t>)
                 {
-                    for (int lx = 0; lx < coeff->filter_size; lx += 16)
+                    for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
-                        __m512 src_ps = _mm512_loadu_ps(reinterpret_cast<const float*>(src_ptr + lx));
+                        for (int lx = 0; lx < coeff[i]->filter_size; lx += 16)
+                        {
+                            const __m512 src_ps = _mm512_cvtepi32_ps(_mm512_cvtepu16_epi32(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(src_ptr + lx))));
+                            const __m512 coeff = _mm512_load_ps(coeff_ptr + lx);
+                            result = _mm512_fmadd_ps(src_ps, coeff, result);
+                        }
 
-                        __m512 coeff = _mm512_load_ps(coeff_ptr + lx);
-
-                        result = _mm512_fmadd_ps(src_ps, coeff, result);
+                        coeff_ptr += coeff[i]->coeff_stride;
+                        src_ptr += src_stride;
                     }
 
-                    coeff_ptr += coeff->coeff_stride;
-                    src_ptr += src_pitch;
+                    const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
+                    __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
+                    hsum = _mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum));
+                    const __m128i src_int = _mm_packus_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128());
+                    _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
+
+                    ++meta;
                 }
+                else
+                {
+                    for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
+                    {
+                        for (int lx = 0; lx < coeff[i]->filter_size; lx += 16)
+                        {
+                            const __m512 src_ps = _mm512_max_ps(_mm512_loadu_ps(src_ptr + lx), min_val);
+                            const __m512 coeff = _mm512_load_ps(coeff_ptr + lx);
+                            result = _mm512_fmadd_ps(src_ps, coeff, result);
+                        }
 
-                __m256 sum_lo = _mm256_hadd_ps(_mm512_castps512_ps256(result), _mm512_castps512_ps256(result));
-                __m128 lo_sum = _mm_add_ss(_mm256_castps256_ps128(_mm256_hadd_ps(sum_lo, sum_lo)), _mm256_extractf128_ps(_mm256_hadd_ps(sum_lo, sum_lo), 1));
+                        coeff_ptr += coeff[i]->coeff_stride;
+                        src_ptr += src_stride;
+                    }
 
-                __m256 hi = _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1));
-                __m128 sum_hi = _mm256_extractf128_ps(_mm256_hadd_ps(_mm256_hadd_ps(hi, hi), _mm256_hadd_ps(hi, hi)), 1);
-                __m128 hi_sum = _mm_add_ss(_mm256_castps256_ps128(_mm256_hadd_ps(_mm256_hadd_ps(hi, hi), _mm256_hadd_ps(hi, hi))), sum_hi);
+                    const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
+                    __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
+                    dstp[x] = _mm_cvtss_f32(_mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum)));
 
-                // Save data
-                _mm_storeu_ps(reinterpret_cast<float*>(dst + x), _mm_add_ss(lo_sum, hi_sum));
-
-                meta++;
+                    ++meta;
+                }
             }
-        } // for (x)
-        dst += dst_pitch;
-    } // for (y)
+
+            dstp += dst_stride;
+        }
+    }
 }
 
-template void resize_plane_avx512<uint8_t>(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-template void resize_plane_avx512<uint16_t>(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-template void resize_plane_avx512<float>(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
+template void JincResize::resize_plane_avx512<uint8_t>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_avx512<uint16_t>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_avx512<float>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);

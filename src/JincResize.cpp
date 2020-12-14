@@ -265,7 +265,7 @@ static void init_coeff_table(EWAPixelCoeff* out, int quantize_x, int quantize_y,
     out->filter_size = filter_size;
     out->quantize_x = quantize_x;
     out->quantize_y = quantize_y;
-    out->coeff_stride = ((filter_size + 7) / 8) * 8;
+    out->coeff_stride = (filter_size + 15) & ~15;
 
     // Allocate metadata
     out->meta = new EWAPixelCoeffMeta[static_cast<int64_t>(dst_width) * dst_height];
@@ -307,8 +307,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     const double filter_step_x = min(filter_scale_x, 1.0);
     const double filter_step_y = min(filter_scale_y, 1.0);
 
-    const float filter_support_x = static_cast<float>(radius) / filter_step_x;
-    const float filter_support_y = static_cast<float>(radius) / filter_step_y;
+    const float filter_support_x = static_cast<float>(radius / filter_step_x);
+    const float filter_support_y = static_cast<float>(radius / filter_step_y);
 
     const int filter_size_x = static_cast<int>(ceil(filter_support_x * 2.0));
     const int filter_size_y = static_cast<int>(ceil(filter_support_y * 2.0));
@@ -334,9 +334,9 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     // Use to advance the coeff pointer
     const int coeff_per_pixel = out->coeff_stride * filter_size;
 
-    for (int y = 0; y < dst_height; y++)
+    for (int y = 0; y < dst_height; ++y)
     {
-        for (int x = 0; x < dst_width; x++)
+        for (int x = 0; x < dst_width; ++x)
         {
             bool is_border = false;
 
@@ -414,13 +414,13 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
                 int curr_factor_ptr = tmp_array_top;
 
                 const double radius2 = radius * radius;
-                for (int ly = 0; ly < filter_size; ly++)
+                for (int ly = 0; ly < filter_size; ++ly)
                 {
-                    for (int lx = 0; lx < filter_size; lx++)
+                    for (int lx = 0; lx < filter_size; ++lx)
                     {
                         // Euclidean distance to sampling pixel
-                        const float dx = (current_x - window_x) * filter_step_x;
-                        const float dy = (current_y - window_y) * filter_step_y;
+                        const float dx = static_cast<float>((current_x - window_x) * filter_step_x);
+                        const float dy = static_cast<float>((current_y - window_y) * filter_step_y);
                         const float dist = dx * dx + dy * dy;
                         double index_d = lround(static_cast<double>((samples - static_cast<int64_t>(1))) * dist / radius2) + DOUBLE_ROUND_MAGIC_NUMBER;
                         int index = *reinterpret_cast<int*>(&index_d);
@@ -430,20 +430,20 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
                         tmp_array[curr_factor_ptr + static_cast<int64_t>(lx)] = factor;
                         divider += factor;
 
-                        window_x++;
+                        ++window_x;
                     }
 
                     curr_factor_ptr += out->coeff_stride;
 
                     window_x = window_begin_x;
-                    window_y++;
+                    ++window_y;
                 }
 
                 // Second loop to divide the coeff
                 curr_factor_ptr = tmp_array_top;
-                for (int ly = 0; ly < filter_size; ly++)
+                for (int ly = 0; ly < filter_size; ++ly)
                 {
-                    for (int lx = 0; lx < filter_size; lx++)
+                    for (int lx = 0; lx < filter_size; ++lx)
                     {
                         tmp_array[curr_factor_ptr + static_cast<int64_t>(lx)] /= divider;
                     }
@@ -469,83 +469,82 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     // Copy from tmp_array to real array
     const int tmp_array_size = tmp_array.size();
     out->factor = static_cast<float*>(_aligned_malloc(tmp_array_size * sizeof(float), 64)); // aligned to cache line
-    memcpy(out->factor, &tmp_array[0], tmp_array_size * sizeof(float));
+    if (out->factor)
+        memcpy(out->factor, &tmp_array[0], tmp_array_size * sizeof(float));
 }
 
 /* Planar resampling with coeff table */
-/* 8-16 bit */
-//#pragma intel optimization_parameter target_arch=sse
 template<typename T>
-static void resize_plane_c(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_,
-    int dst_width, int dst_height, int src_stride, int dst_stride, float peak)
+void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {
-    EWAPixelCoeffMeta* meta = coeff->meta;
-
-    const T* srcp = reinterpret_cast<const T*>(src_);
-    T* VS_RESTRICT dstp = reinterpret_cast<T*>(dst_);
-
-    src_stride /= sizeof(T);
-    dst_stride /= sizeof(T);
-
-    for (int y = 0; y < dst_height; y++)
+    const int pixel_size = sizeof(T);
+    const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
+    const int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
+    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
+    for (int i = 0; i < planecount; ++i)
     {
-        for (int x = 0; x < dst_width; x++)
+        const int plane = current_planes[i];
+
+        const int src_stride = src->GetPitch(plane) / pixel_size;
+        const int dst_stride = dst->GetPitch(plane) / pixel_size;
+        const int dst_width = dst->GetRowSize(plane) / pixel_size;
+        const int dst_height = dst->GetHeight(plane);
+        const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
+        T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane));
+        EWAPixelCoeffMeta* meta = coeff[i]->meta;
+
+        for (int y = 0; y < dst_height; ++y)
         {
-            const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
-            const float* coeff_ptr = coeff->factor + meta->coeff_meta;
-
-            float result = 0.f;
-
-            for (int ly = 0; ly < coeff->filter_size; ly++)
+            for (int x = 0; x < dst_width; ++x)
             {
-                for (int lx = 0; lx < coeff->filter_size; lx++)
+                const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
+                const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
+
+                float result = 0.f;
+
+                for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                 {
-                    result += src_ptr[lx] * coeff_ptr[lx];
+                    for (int lx = 0; lx < coeff[i]->filter_size; ++lx)
+                    {
+                        result += src_ptr[lx] * coeff_ptr[lx];
+                    }
+                    coeff_ptr += coeff[i]->coeff_stride;
+                    src_ptr += src_stride;
                 }
-                coeff_ptr += coeff->coeff_stride;
-                src_ptr += src_stride;
+
+                if constexpr (std::is_integral_v<T>)
+                    dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
+                else
+                    dstp[x] = result;
+
+                ++meta;
             }
 
-            if (!(std::is_same_v<T, float>))
-                dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
-            else
-                dstp[x] = result;
-
-            meta++;
+            dstp += dst_stride;
         }
-
-        dstp += dst_stride;
     }
 }
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), w(target_width), h(target_height), _opt(opt)
+    : GenericVideoFilter(_child)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
-
     if (tap < 1 || tap > 16)
         env->ThrowError("JincResize: tap must be between 1..16.");
-
     if (quant_x < 1 || quant_x > 256)
         env->ThrowError("JincResize: quant_x must be between 1..256.");
-
     if (quant_y < 1 || quant_y > 256)
         env->ThrowError("JincResize: quant_y must be between 1..256.");
-
-    if (_opt > 3)
+    if (opt > 3)
         env->ThrowError("JincResize: opt higher than 3 is not allowed.");
-
     if (blur < 0.0 || blur > 10.0)
         env->ThrowError("JincResize: blur must be between 0.0..10.0.");
-
-    if (!(env->GetCPUFlags() & CPUF_AVX512F) && _opt == 3)
-        env->ThrowError("JincResize: opt=2 requires AVX-512F.");
-
-    if (!(env->GetCPUFlags() & CPUF_AVX2) && _opt == 2)
+    if (opt == 3 && !(env->GetCPUFlags() & CPUF_AVX512F))
+        env->ThrowError("JincResize: opt=3 requires AVX-512F.");
+    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2))
         env->ThrowError("JincResize: opt=2 requires AVX2.");
-
-    if (!(env->GetCPUFlags() & CPUF_SSE4_1) && _opt == 1)
+    if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
 
     has_at_least_v8 = true;
@@ -561,84 +560,85 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (crop_height <= 0.0)
         crop_height = vi.height - crop_top + crop_height;
 
-    vi.width = w;
-    vi.height = h;
-
+    vi.width = target_width;
+    vi.height = target_height;
     blur = 1.0 - blur / 100.0;
-
     peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
-
     double radius = jinc_zeros[tap - 1];
-
     int samples = 1024;  // should be a multiple of 4
-
-    int quantize_x = quant_x;
-    int quantize_y = quant_y;
-
     init_lut = new Lut();
-    init_lut->InitLut(samples, radius, blur);
-    
-    int sub_w = 0, sub_h = 0;
-    double div_w = 0.0, div_h = 0.0;
-
+    init_lut->InitLut(samples, radius, blur);    
+    int sub_w, sub_h;
+    double div_w, div_h;
     planecount = min(vi.NumComponents(), 3);
 
-    if (planecount > 1 && (!vi.IsPlanarRGB() || !vi.IsPlanarRGBA() || !vi.Is444()))
+    if (planecount > 1 && (!vi.IsRGB() || !vi.Is444()))
     {
         sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
         sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
         div_w = static_cast<double>(static_cast<int64_t>(1) << sub_w);
         div_h = static_cast<double>(static_cast<int64_t>(1) << sub_h);
     }
+    else
+    {
+        sub_w = sub_h = 0;
+        div_w = div_h = 0.0;
+    }
     
-    for (int i = 0; i < planecount; i++)
+    for (int i = 0; i < planecount; ++i)
     {
         out[i] = new EWAPixelCoeff();
 
-        if ((vi.IsYUV() || vi.IsYUVA()) && !vi.Is444())
+        if (!vi.IsRGB() && !vi.Is444())
         {
             if (i == 0)
-                generate_coeff_table_c(init_lut, out[0], quantize_x, quantize_y, samples, src_width, src_height,
-                    w, h, radius, crop_left, crop_top, crop_width, crop_height);
+                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height,
+                    target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
             else
-                generate_coeff_table_c(init_lut, out[i], quantize_x, quantize_y, samples, src_width >> sub_w, src_height >> sub_h,
-                    w >> sub_w, h >> sub_h, radius, crop_left / div_w, crop_top / div_h, crop_width / div_w, crop_height / div_h);
+                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                    target_width >> sub_w, target_height >> sub_h, radius, crop_left / div_w, crop_top / div_h, crop_width / div_w, crop_height / div_h);
         }
         else
-            generate_coeff_table_c(init_lut, out[i], quantize_x, quantize_y, samples, src_width, src_height,
-                w, h, radius, crop_left, crop_top, crop_width, crop_height);
+            generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height,
+                target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
     }
 
-    avx512 = (!!(env->GetCPUFlags() & CPUF_AVX512F) && _opt < 0) || _opt == 3;
-    avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && _opt < 0) || _opt == 2;
-    sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && _opt < 0) || _opt == 1;
+    const bool avx512 = (opt == 3);
+    const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
+    const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
-    if (vi.ComponentSize() == 1)
+    switch (vi.ComponentSize())
     {
-        if (avx512)
-            process_frame = resize_plane_avx512<uint8_t>;
-        else if (avx2)
-            process_frame = resize_plane_avx2<uint8_t>;
-        else
-            process_frame = resize_plane_sse41<uint8_t>;
-    }
-    else if (vi.ComponentSize() == 2)
-    {
-        if (avx512)
-            process_frame = resize_plane_avx512<uint16_t>;
-        else if (avx2)
-            process_frame = resize_plane_avx2<uint16_t>;
-        else
-            process_frame = resize_plane_sse41<uint16_t>;
-     }
-    else
-    {
-        if (avx512)
-            process_frame = resize_plane_avx512<float>;
-        else if (avx2)
-            process_frame = resize_plane_avx2<float>;
-        else
-            process_frame = resize_plane_sse41<float>;
+        case 1:
+            if (avx512)
+                process_frame = &JincResize::resize_plane_avx512<uint8_t>;
+            else if (avx2)
+                process_frame = &JincResize::resize_plane_avx2<uint8_t>;
+            else if (sse41)
+                process_frame = &JincResize::resize_plane_sse41<uint8_t>;
+            else
+                process_frame = &JincResize::resize_plane_c<uint8_t>;
+            break;
+        case 2:
+            if (avx512)
+                process_frame = &JincResize::resize_plane_avx512<uint16_t>;
+            else if (avx2)
+                process_frame = &JincResize::resize_plane_avx2<uint16_t>;
+            else if (sse41)
+                process_frame = &JincResize::resize_plane_sse41<uint16_t>;
+            else
+                process_frame = &JincResize::resize_plane_c<uint16_t>;
+            break;
+        default:
+            if (avx512)
+                process_frame = &JincResize::resize_plane_avx512<float>;
+            else if (avx2)
+                process_frame = &JincResize::resize_plane_avx2<float>;
+            else if (sse41)
+                process_frame = &JincResize::resize_plane_sse41<float>;
+            else
+                process_frame = &JincResize::resize_plane_c<float>;
+            break;
     }
 }
 
@@ -647,7 +647,7 @@ JincResize::~JincResize()
     delete[] init_lut->lut;
     delete init_lut;
 
-    for (int i = 0; i < planecount; i++)
+    for (int i = 0; i < planecount; ++i)
     {
         delete_coeff_table(out[i]);
         delete out[i];
@@ -657,35 +657,9 @@ JincResize::~JincResize()
 PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
 {
     PVideoFrame src = child->GetFrame(n, env);
-    PVideoFrame dst;
-    if (has_at_least_v8) dst = env->NewVideoFrameP(vi, &src); else dst = env->NewVideoFrame(vi);
+    PVideoFrame dst = (has_at_least_v8) ? env->NewVideoFrameP(vi, &src) : env->NewVideoFrame(vi);
 
-    int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
-    int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
-    for (int i = 0; i < planecount; i++)
-    {
-        const int plane = current_planes[i];
-
-        int src_stride = src->GetPitch(plane);
-        int dst_stride = dst->GetPitch(plane);
-        int dst_width = dst->GetRowSize(plane) / vi.ComponentSize();
-        int dst_height = dst->GetHeight(plane);
-        const uint8_t* srcp = src->GetReadPtr(plane);
-        uint8_t* VS_RESTRICT dstp = dst->GetWritePtr(plane);
-
-        if (!sse41 && !avx2 && !avx512)
-        {
-            if (vi.ComponentSize() == 1)
-                resize_plane_c<uint8_t>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
-            else if (vi.ComponentSize() == 2)
-                resize_plane_c<uint16_t>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
-            else
-                resize_plane_c<float>(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride, peak);
-        }
-        else
-            process_frame(out[i], srcp, dstp, dst_width, dst_height, src_stride, dst_stride);
-    }
+    (this->*process_frame)(out, src, dst, env);
 
     return dst;
 }
@@ -724,9 +698,9 @@ static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx 
         out_args->add(args[src_left_idx + 2], "src_width");
     if (args[src_left_idx + 3].Defined())
         out_args->add(args[src_left_idx + 3], "src_height");
-    if (args[src_left_idx + 0].Defined())
+    if (args[src_left_idx + 4].Defined())
         out_args->add(args[src_left_idx + 4], "quant_x");
-    if (args[src_left_idx + 1].Defined())
+    if (args[src_left_idx + 5].Defined())
         out_args->add(args[src_left_idx + 5], "quant_y");
 }
 

@@ -2,11 +2,9 @@
 #define __JINCRESIZE_H__
 
 #include <immintrin.h>
-
-#include "avisynth.h"
 #include "avs/minmax.h"
 
-#define VS_RESTRICT __restrict
+#include "avisynth.h"
 
 struct EWAPixelCoeffMeta
 {
@@ -34,25 +32,24 @@ public:
     double* lut;
 };
 
-template <typename T>
-void resize_plane_sse41(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-template <typename T>
-void resize_plane_avx2(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-template <typename T>
-void resize_plane_avx512(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
-
 class JincResize : public GenericVideoFilter
 {
-    int w, h;
-    int _opt;
     Lut* init_lut;
     EWAPixelCoeff* out[3]{};
-    bool avx512, avx2, sse41;
     int planecount;
     bool has_at_least_v8;
     float peak;
 
-    void(*process_frame)(EWAPixelCoeff* coeff, const void* src_, void* VS_RESTRICT dst_, int dst_width, int dst_height, int src_pitch, int dst_pitch);
+    template<typename T>
+    void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T>
+    void resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T>
+    void resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T>
+    void resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+
+    void(JincResize::*process_frame)(EWAPixelCoeff**, PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env);

@@ -68,9 +68,10 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     Default: 0.0.
     
 - opt (JincResize only)\
-    Controls the used CPU optimizations.\
-    0: Use C++ routine.\
-    1: Use SSE4.1 routine.\
-    2: Use AVX2 routine.\
-    3: Use AVX-512 routine.\
-    Default: 3, if AVX-512 not available 2, if AVX2 not available 1, if SSE4.1 not available 0.  
+    Sets which cpu optimizations to use.\
+    -1: Auto-detect without AVX-512.\
+    0: Use C++ code.\
+    1: Use SSE4.1 code.\
+    2: Use AVX2 code.\
+    3: Use AVX-512 code.\
+    Default: -1.

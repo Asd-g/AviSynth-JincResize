@@ -1,3 +1,9 @@
+##### 1.2.0:
+    AVX-512 code is not used as default when AVX-512 CPU instructions are available.
+    Fixed AVX-512 output.
+    Prevent 'nan' values for the float input (SIMD).
+    Fixed JincXXXResize parameters 'quant_x' and 'quant_y' when called by name.
+
 ##### 1.1.0:
     Added AVX-512 code.
 
@@ -8,3 +14,4 @@
 
 ##### 1.0.0:
     Port of the VapourSynth plugin JincResize r7.1.
+    
