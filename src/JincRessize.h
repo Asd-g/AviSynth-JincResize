@@ -6,6 +6,8 @@
 
 #include "avisynth.h"
 
+#include "omp.h"
+
 struct EWAPixelCoeffMeta
 {
     int start_x, start_y;
