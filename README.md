@@ -9,7 +9,7 @@ SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize](https://g
 # Usage
 
 ```
-JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", int "opt")
+JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", int "threads", int "opt")
 ```
 
 ##### There are 4 additional functions:
@@ -19,7 +19,7 @@ JincResize (clip, int target_width, int target_height, float "src_left", float "
     Jinc256Resize is an alias for JincResize(tap=8).
     
 ```
-Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y")
+Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "threads")
 ```
 
 ## Parameters:
@@ -66,6 +66,11 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     To achieve blur, the value should more than 0.0.\
     Must be between 0.0 and 10.0.
     Default: 0.0.
+    
+- threads\
+    How many logical processors are used.\
+    0: Maximum logical processors are used.\
+    Default: 0.
     
 - opt (JincResize only)\
     Sets which cpu optimizations to use.\

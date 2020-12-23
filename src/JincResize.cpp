@@ -1,5 +1,7 @@
 #include <vector>
 #include <cmath>
+#include <thread>
+#include <string>
 
 #include "JincRessize.h"
 
@@ -491,14 +493,14 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
 
-#pragma omp parallel for
+#pragma omp parallel for num_threads(threads_)
         for (int y = 0; y < dst_height; ++y)
         {
-            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + y * dst_stride;
+            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
  
             for (int x = 0; x < dst_width; ++x)
             {
-                EWAPixelCoeffMeta* meta = coeff[i]->meta + y * dst_width + x;
+                EWAPixelCoeffMeta* meta = coeff[i]->meta + static_cast<int64_t>(y) * dst_width + x;
                 const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
 
@@ -507,9 +509,8 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
                 for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                 {
                     for (int lx = 0; lx < coeff[i]->filter_size; ++lx)
-                    {
                         result += src_ptr[lx] * coeff_ptr[lx];
-                    }
+
                     coeff_ptr += coeff[i]->coeff_stride;
                     src_ptr += src_stride;
                 }
@@ -520,13 +521,12 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
                     dstp[x] = result;
 
             }
-
         }
     }
 }
 
-JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child)
+JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env)
+    : GenericVideoFilter(_child), threads_(threads)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -547,12 +547,18 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
 
+    const int thr = std::thread::hardware_concurrency();
+    if (threads_ == 0)
+        threads_ = thr;
+    else if (threads_ < 0 || threads_ > thr)
+    {
+        const std::string msg = "JincResize: threads must be between 0.." + std::to_string(thr) + ".";
+        env->ThrowError(msg.c_str());
+    }
+
     has_at_least_v8 = true;
     try { env->CheckVersion(8); }
     catch (const AvisynthError&) { has_at_least_v8 = false; };
-
-    int src_width = vi.width;
-    int src_height = vi.height;
 
     if (crop_width <= 0.0)
         crop_width = vi.width - crop_left + crop_width;
@@ -560,6 +566,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (crop_height <= 0.0)
         crop_height = vi.height - crop_top + crop_height;
 
+    int src_width = vi.width;
+    int src_height = vi.height;
     vi.width = target_width;
     vi.height = target_height;
     blur = 1.0 - blur / 100.0;
@@ -680,7 +688,8 @@ AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnviro
         args[8].AsInt(256),
         args[9].AsInt(3),
         args[10].AsFloat(0),
-        args[11].AsInt(-1),
+        args[11].AsInt(0),
+        args[12].AsInt(-1),
         env);
 }
 
@@ -702,6 +711,8 @@ static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx 
         out_args->add(args[src_left_idx + 4], "quant_x");
     if (args[src_left_idx + 5].Defined())
         out_args->add(args[src_left_idx + 5], "quant_y");
+    if (args[src_left_idx + 6].Defined())
+        out_args->add(args[src_left_idx + 6], "threads");
 }
 
 template <int taps>
@@ -710,7 +721,7 @@ AVSValue __cdecl resizer_jinc36resize(AVSValue args, void* user_data, IScriptEnv
     Arguments mapped_args;
 
     resizer(args, &mapped_args);
-    mapped_args.add(args[9].AsInt(taps), "tap");
+    mapped_args.add(args[10].AsInt(taps), "tap");
 
     return env->Invoke("JincResize", mapped_args.args(), mapped_args.arg_names()).AsClip();
 }
@@ -722,12 +733,12 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 {
     AVS_linkage = vectors;
 
-    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[opt]i", Create_JincResize, 0);
+    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[threads]i[opt]i", Create_JincResize, 0);
 
-    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<3>, 0);
-    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<4>, 0);
-    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<6>, 0);
-    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i", resizer_jinc36resize<8>, 0);
+    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<3>, 0);
+    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<4>, 0);
+    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<6>, 0);
+    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<8>, 0);
 
     return "JincResize";
 }

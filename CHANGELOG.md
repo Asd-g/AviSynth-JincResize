@@ -1,3 +1,7 @@
+##### 2.0.0:
+    Added OpenMP support to main processing loops. (DTL2020)
+    Added parameter 'threads'.
+
 ##### 1.2.0:
     AVX-512 code is not used as default when AVX-512 CPU instructions are available.
     Fixed AVX-512 output.

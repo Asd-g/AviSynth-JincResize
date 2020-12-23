@@ -2,11 +2,9 @@
 #define __JINCRESIZE_H__
 
 #include <immintrin.h>
-#include "avs/minmax.h"
 
 #include "avisynth.h"
-
-#include "omp.h"
+#include "avs/minmax.h"
 
 struct EWAPixelCoeffMeta
 {
@@ -41,6 +39,7 @@ class JincResize : public GenericVideoFilter
     int planecount;
     bool has_at_least_v8;
     float peak;
+    int threads_;
 
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
@@ -54,7 +53,7 @@ class JincResize : public GenericVideoFilter
     void(JincResize::*process_frame)(EWAPixelCoeff**, PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
 public:
-    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int opt, IScriptEnvironment* env);
+    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     int __stdcall SetCacheHints(int cachehints, int frame_range)
     {

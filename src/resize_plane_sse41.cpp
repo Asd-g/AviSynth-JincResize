@@ -18,15 +18,14 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
         const __m128 min_val = (i && !vi.IsRGB()) ? _mm_set_ps1(-0.5f) : _mm_setzero_ps();
 
-#pragma omp parallel for
+#pragma omp parallel for num_threads(threads_)
         for (int y = 0; y < dst_height; ++y)
         {
-            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + y * dst_stride;
+            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
 
             for (int x = 0; x < dst_width; ++x)
             {
-                EWAPixelCoeffMeta* meta = coeff[i]->meta + y * dst_width + x;
-
+                EWAPixelCoeffMeta* meta = coeff[i]->meta + static_cast<int64_t>(y) * dst_width + x;
                 const T* src_ptr = srcp + (meta->start_y * static_cast<int64_t>(src_stride)) + meta->start_x;
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m128 result = _mm_setzero_ps();
@@ -88,7 +87,6 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
                     dstp[x] = _mm_cvtss_f32(_mm_hadd_ps(_mm_hadd_ps(result, result), _mm_hadd_ps(result, result)));
                 }
             }
-
         }
     }
 }
