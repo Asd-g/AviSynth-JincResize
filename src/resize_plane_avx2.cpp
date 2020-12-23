@@ -20,14 +20,17 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
         const int dst_width = dst->GetRowSize(plane) / pixel_size;
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
-        T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane));
-        EWAPixelCoeffMeta* meta = coeff[i]->meta;
         const __m256 min_val = (i && !vi.IsRGB()) ? _mm256_set1_ps(-0.5f) : _mm256_setzero_ps();
 
+#pragma omp parallel for
         for (int y = 0; y < dst_height; ++y)
         {
+            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + y * dst_stride;
+
             for (int x = 0; x < dst_width; ++x)
             {
+                EWAPixelCoeffMeta* meta = coeff[i]->meta + y * dst_width + x;
+
                 const T* src_ptr = srcp + (meta->start_y * static_cast<int64_t>(src_stride)) + meta->start_x;
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m256 result = _mm256_setzero_ps();
@@ -52,7 +55,6 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
                     const __m128i src_int = _mm_packus_epi16(_mm_packs_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()), _mm_setzero_si128());
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
 
-                    ++meta;
                 }
                 else if constexpr (std::is_same_v<T, uint16_t>)
                 {
@@ -74,7 +76,6 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
                     const __m128i src_int = _mm_packus_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128());
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
 
-                    ++meta;
                 }
                 else
                 {
@@ -93,12 +94,9 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
 
                     __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(result), _mm256_extractf128_ps(result, 1));
                     dstp[x] = _mm_cvtss_f32(_mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum)));
-
-                    ++meta;
                 }
             }
 
-            dstp += dst_stride;
         }
     }
 }

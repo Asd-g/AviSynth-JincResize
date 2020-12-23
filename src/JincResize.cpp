@@ -490,13 +490,15 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
         const int dst_width = dst->GetRowSize(plane) / pixel_size;
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
-        T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane));
-        EWAPixelCoeffMeta* meta = coeff[i]->meta;
 
+#pragma omp parallel for
         for (int y = 0; y < dst_height; ++y)
         {
+            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + y * dst_stride;
+ 
             for (int x = 0; x < dst_width; ++x)
             {
+                EWAPixelCoeffMeta* meta = coeff[i]->meta + y * dst_width + x;
                 const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
 
@@ -517,10 +519,8 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
                 else
                     dstp[x] = result;
 
-                ++meta;
             }
 
-            dstp += dst_stride;
         }
     }
 }
