@@ -1,3 +1,6 @@
+##### 1.2.0:
+    Used MSVC instead Intel C++ for faster binaries.
+
 ##### 2.0.0:
     Added OpenMP support to main processing loops. (DTL2020)
     Added parameter 'threads'.
