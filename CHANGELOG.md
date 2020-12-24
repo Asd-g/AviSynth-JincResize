@@ -1,4 +1,4 @@
-##### 1.2.0:
+##### 2.0.1:
     Used MSVC instead Intel C++ for faster binaries.
 
 ##### 2.0.0:
