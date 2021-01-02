@@ -493,6 +493,15 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
 
+        if (bAddProc)
+        {
+            const int src_width = src->GetRowSize(plane) / pixel_size;
+            const int src_height = src->GetHeight(plane);
+            unsigned char *dstp_add = reinterpret_cast<unsigned char *>(dst->GetWritePtr(plane));
+            KernelProc((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
+            continue;
+        }
+
 #pragma omp parallel for num_threads(threads_)
         for (int y = 0; y < dst_height; ++y)
         {
@@ -524,6 +533,7 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
         }
     }
 }
+
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env)
     : GenericVideoFilter(_child), threads_(threads)
@@ -570,12 +580,56 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     int src_height = vi.height;
     vi.width = target_width;
     vi.height = target_height;
+
+    bAddProc = false;
+
+    // check if target widh and height are both integer and same multipliers
+    float fMultH = (float)(target_width / src_width);
+    float fMultV = (float)(target_height / src_height);
+    if (fMultH == fMultV)
+    {
+        if ((fMultH - (long)fMultH) == 0 && (fMultV - (long)fMultV == 0)) // lookls like both integer
+        {
+            bAddProc = true;
+            iMul = (int64_t)fMultH;
+        }
+    }
+
+    if (bAddProc)
+    {
+        // init data arrays
+//        iMul = static_cast<int64_t>(iMultH);
+        iTaps = static_cast<int64_t>(tap);
+        iKernelSize = (iMul * iTaps * 2);
+
+        g_pfKernel = new float[iKernelSize * iKernelSize];
+        memset(g_pfKernel, 0, iKernelSize * iKernelSize * sizeof(float));
+
+        g_pfKernelWeighted = new float[iKernelSize * iKernelSize * 256];
+        memset(g_pfKernelWeighted, 0, iKernelSize * iKernelSize * sizeof(float) * 256);
+
+        fill2DKernel();
+
+        iWidth = src_width;
+        iHeight = src_height;
+
+        iWidthEl = iWidth + 2 * iKernelSize; 
+        iHeightEl = iHeight + 2 * iKernelSize;
+
+        g_pElImageBuffer = (BYTE*)malloc(iWidthEl * iHeightEl);
+
+        SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
+        g_pfFilteredImageBuffer = (float*)malloc(SzFilteredImageBuffer);
+        pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
+        
+    }
+
     blur = 1.0 - blur / 100.0;
     peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
     double radius = jinc_zeros[tap - 1];
     int samples = 1024;  // should be a multiple of 4
     init_lut = new Lut();
-    init_lut->InitLut(samples, radius, blur);    
+    init_lut->InitLut(samples, radius, blur);
     int sub_w, sub_h;
     double div_w, div_h;
     planecount = min(vi.NumComponents(), 3);
@@ -592,23 +646,26 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         sub_w = sub_h = 0;
         div_w = div_h = 0.0;
     }
-    
-    for (int i = 0; i < planecount; ++i)
-    {
-        out[i] = new EWAPixelCoeff();
 
-        if (!vi.IsRGB() && !vi.Is444())
+    if (bAddProc != true) 
+    {
+        for (int i = 0; i < planecount; ++i)
         {
-            if (i == 0)
-                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height,
-                    target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+            out[i] = new EWAPixelCoeff();
+
+            if (!vi.IsRGB() && !vi.Is444())
+            {
+                if (i == 0)
+                    generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height,
+                        target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+                else
+                    generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                        target_width >> sub_w, target_height >> sub_h, radius, crop_left / div_w, crop_top / div_h, crop_width / div_w, crop_height / div_h);
+            }
             else
-                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
-                    target_width >> sub_w, target_height >> sub_h, radius, crop_left / div_w, crop_top / div_h, crop_width / div_w, crop_height / div_h);
+                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height,
+                    target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
         }
-        else
-            generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height,
-                target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
     }
 
     const bool avx512 = (opt == 3);
@@ -650,6 +707,250 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     }
 }
 
+void JincResize::fill2DKernel(void)
+{
+    float fPi = 3.14159265358979f;
+    int i, j;
+
+    // our 2D just iMul-finely sampled kernel defined in output size
+
+    /* Sinc (SincLin2) kernel
+    for (i = 0; i < iKernelSize; i++)
+    {
+        for (j = 0; j < iKernelSize; j++)
+        {
+            float fDist = sqrtf((float(iKernelSize / 2) - j)*(float(iKernelSize / 2) - j) + (float(iKernelSize / 2) - i)*(float(iKernelSize / 2) - i));
+
+            // make kernel round in 2d
+            if (fDist > iKernelSize / 2) continue;
+
+            float fArg = (fPi*fDist/iMul);
+
+            if (fDist <= (iKernelSize / 4))
+            {
+                if (fArg != 0)
+                {
+                    g_pfKernel[i*iKernelSize + j] = sinf(fArg) / fArg;
+                }
+                else
+                    g_pfKernel[i*iKernelSize + j] = 1.0f;
+
+            }
+            else if (fDist > (iKernelSize / 4) && fDist <= (iKernelSize/2))
+            {
+                g_pfKernel[i*iKernelSize + j] = (sinf(fArg) / fArg) * ((2 - (4 * fDist / iKernelSize))); // SincLin2Resize trapezoidal weighting
+            }
+            else
+                g_pfKernel[i*iKernelSize + j] = 0.0f;
+        } //j
+    } //i
+    */
+
+    /* Jinc weighted by Jinc - EWA Lanczos kernel */
+    for (i = 0; i < iKernelSize; i++)
+    {
+
+        if (i == (iKernelSize / 2))
+        {
+            int dbr = 0;
+        }
+        for (j = 0; j < iKernelSize; j++)
+        {
+            float fDist = sqrtf((float(iKernelSize / 2) - j) * (float(iKernelSize / 2) - j) + (float(iKernelSize / 2) - i) * (float(iKernelSize / 2) - i));
+
+            // make kernel round in 2d
+            if (fDist > iKernelSize / 2) continue;
+
+            float fArg = (fPi * fDist / iMul);
+
+            float fArg_w = fDist * 3.9f / (iKernelSize / 2);
+
+            if (fArg != 0)
+            {
+                float fBess = 2.0f * std::cyl_bessel_jf(1, fArg) / fArg;
+                float fW; // Jinc window
+                if (fArg_w != 0)
+                {
+                    fW = 2.0f * std::cyl_bessel_jf(1, fArg_w) / fArg_w;
+                }
+                else
+                {
+                    fW = 1.0f;
+                }
+
+                g_pfKernel[i * iKernelSize + j] = fBess * fW;
+            }
+            else
+                g_pfKernel[i * iKernelSize + j] = 1.0f;
+
+
+        } //j
+    } //i
+
+
+    // normalize to 1
+    float fSum = 0.0f;
+    for (i = 0; i < iKernelSize; i++)
+    {
+        for (j = 0; j < iKernelSize; j++)
+        {
+            fSum += g_pfKernel[i * iKernelSize + j];
+        }
+    }
+
+    for (i = 0; i < iKernelSize; i++)
+    {
+        for (j = 0; j < iKernelSize; j++)
+        {
+            g_pfKernel[i * iKernelSize + j] /= fSum;
+            g_pfKernel[i * iKernelSize + j] *= (iMul * iMul); // energy dissipated at iMul^2 output samples, so 1 norm * iMul^2
+        }
+    }
+
+    // fill 256 kernel images weighted by 8bit unsigned int
+    for (int64_t iSample = 1; iSample < 256; iSample++) // skip 0 - memory was memset to 0.
+    {
+        float* pfCurrKernel = g_pfKernelWeighted + iSample * iKernelSize * iKernelSize;
+        for (i = 0; i < iKernelSize; i++)
+        {
+            for (j = 0; j < iKernelSize; j++)
+            {
+                pfCurrKernel[i * iKernelSize + j] = g_pfKernel[i * iKernelSize + j] * iSample;
+            }
+        }
+    }
+
+    // TO DO : 1. Make kernel half height. 2. Add run-length encoding for non-zero line length.
+
+}
+
+void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{
+    int64_t row, col, k_row, k_col;
+
+    // current input plane sizes
+    iWidthEl = iInpWidth + 2 * iKernelSize;
+    iHeightEl = iInpHeight + 2 * iKernelSize;
+
+    memset(g_pElImageBuffer, 0, iWidthEl * iHeightEl);
+
+    memset(g_pfFilteredImageBuffer, 0, (iWidthEl * iHeightEl * iMul * iMul * sizeof(float)));
+
+
+    // fill center
+    for (row = 0; row < iInpHeight; row++)
+    {
+        for (col = 0; col < iInpWidth; col++)
+        {
+            g_pElImageBuffer[(row + iKernelSize) * iWidthEl + (col + iKernelSize)] = src[(row * iSrcStride + col)];
+        }
+    }
+
+    
+    // fill upper strip - dup 1st line
+    for (row = 0; row < iKernelSize; row++)
+    {
+        for (col = 0; col < iInpWidth; col++)
+        {
+            g_pElImageBuffer[row * iWidthEl + (col + iKernelSize)] = src[col]; 
+        }
+    }
+
+    // fill left strip - dup first column, 
+    // fill right strip - dup last column
+    // combine left and right in 1 cycle for 1 memory pass.
+    for (row = 0; row < iInpHeight; row++)
+    {
+        for (col = 0; col < iKernelSize; col++) // left
+        {
+            g_pElImageBuffer[(row + iKernelSize) * iWidthEl + col] = src[(row * iSrcStride) + 0];
+        }
+
+        for (col = iInpWidth; col < (iInpWidth + iKernelSize); col++) // right
+        {
+            g_pElImageBuffer[(row + iKernelSize) * iWidthEl + col + iKernelSize] = src[(row * iSrcStride) + (iInpWidth - 1)];
+        }
+    }
+    
+    // fill lower strip - dup last line
+    for (row = iInpHeight + iKernelSize; row < iHeightEl; row++)
+    {
+        for (col = 0; col < iInpWidth; col++)
+        {
+            int64_t Ptr = static_cast<int64_t>((row) * iWidthEl + (col + iKernelSize));
+            g_pElImageBuffer[Ptr] = src[((iInpHeight - 1) * iSrcStride + col)]; 
+        }
+    }
+ 
+
+    // 2d convolution pass - read kernel lut and add row to row
+    int64_t iOutWidth = iWidthEl * iMul;
+
+//#pragma omp parallel for num_threads(threads_) // do not works for x64 still - need to fix (pointers ?)
+    for (row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+    {
+        // start all row-only dependent ptrs here
+        //int64_t iProcPtr = static_cast<int64_t>((row * iMul - (iKernelSize / 2)) * iOutWidth) + (col * iMul - (iKernelSize / 2));
+        int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
+        int64_t iInpPtrRowStart = row * iWidthEl;
+
+        for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+        {
+            unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+            // fast skip zero
+            if (ucInpSample == 0) continue;
+
+ //           int64_t iKrnPtr = static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+            float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+
+            float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+            for (k_row = 0; k_row < iKernelSize; k_row++)
+            {
+                // add full kernel row to output
+                for (k_col = 0; k_col < iKernelSize; k_col++)
+                {
+/*                    if (pfProc > pfEndOfFilteredImageBuffer || pfProc < g_pfFilteredImageBuffer)
+                    {
+                        int idbr = 2; // omp fails here - some bad happens with pointers
+                        continue;
+                    } */ 
+                   pfProc[k_col] += pfCurrKernel[k_col];
+                } // k_col
+                pfProc += iOutWidth; // point to next start point in output buffer now
+                pfCurrKernel += iKernelSize; // point to next kernel row now
+            } // k_row
+        } // col
+    } // row
+
+   
+    for (row = 0; row < iInpHeight * iMul; row++)
+    {
+        for (col = 0; col < iInpWidth * iMul; col++)
+        {
+            unsigned char ucVal;
+            float fVal = g_pfFilteredImageBuffer[(row + iKernelSize * iMul) * iWidthEl * iMul + col + iKernelSize * iMul]; 
+
+            fVal += 0.5f;
+
+            if (fVal > 255.0f)
+            {
+                fVal = 255.0f;
+            }
+            if (fVal < 0.0f)
+            {
+                fVal = 0.0f;
+            } 
+            ucVal = (unsigned char)fVal;
+
+            dst[(row * iDstStride + col)] = ucVal;
+        }
+    }
+    
+
+}
+
 JincResize::~JincResize()
 {
     delete[] init_lut->lut;
@@ -659,6 +960,14 @@ JincResize::~JincResize()
     {
         delete_coeff_table(out[i]);
         delete out[i];
+    }
+
+    if (bAddProc)
+    {
+        delete g_pfKernel;
+        delete g_pfKernelWeighted;
+        free(g_pElImageBuffer);
+        free(g_pfFilteredImageBuffer);
     }
 }
 
@@ -742,3 +1051,4 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 
     return "JincResize";
 }
+
