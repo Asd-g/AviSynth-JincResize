@@ -668,18 +668,18 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         }
     }
 
-    const bool avx512 = (opt == 3);
-    const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
-    const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
+   /* const bool */avx512 = (opt == 3);
+   /* const bool*/ avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
+    /*const bool*/ sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
     switch (vi.ComponentSize())
     {
         case 1:
             if (avx512)
                 process_frame = &JincResize::resize_plane_avx512<uint8_t>;
-            else if (avx2)
+            else if (avx2 && !bAddProc)
                 process_frame = &JincResize::resize_plane_avx2<uint8_t>;
-            else if (sse41)
+            else if (sse41 && !bAddProc)
                 process_frame = &JincResize::resize_plane_sse41<uint8_t>;
             else
                 process_frame = &JincResize::resize_plane_c<uint8_t>;
@@ -886,7 +886,7 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
     // 2d convolution pass - read kernel lut and add row to row
     int64_t iOutWidth = iWidthEl * iMul;
 
-//#pragma omp parallel for num_threads(threads_) // do not works for x64 still - need to fix (pointers ?)
+#pragma omp parallel for num_threads(threads_) // do not works for x64 and VS2019 compiler still - need to fix (pointers ?)
     for (row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here
@@ -894,34 +894,112 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
         int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
         int64_t iInpPtrRowStart = row * iWidthEl;
 
-        for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+        if (avx512)
         {
-            unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
-
-            // fast skip zero
-            if (ucInpSample == 0) continue;
-
- //           int64_t iKrnPtr = static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
-            float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
-
-            float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
-
-            for (k_row = 0; k_row < iKernelSize; k_row++)
+            for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
             {
-                // add full kernel row to output
-                for (k_col = 0; k_col < iKernelSize; k_col++)
+                unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+                // fast skip zero
+                if (ucInpSample == 0) continue;
+
+                float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+
+                float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+                for (k_row = 0; k_row < iKernelSize; k_row++)
                 {
-/*                    if (pfProc > pfEndOfFilteredImageBuffer || pfProc < g_pfFilteredImageBuffer)
+                    // add full kernel row to output - AVX512
+                    for (k_col = 0; k_col < iKernelSize; k_col += 16)
                     {
-                        int idbr = 2; // omp fails here - some bad happens with pointers
-                        continue;
-                    } */ 
-                   pfProc[k_col] += pfCurrKernel[k_col];
-                } // k_col
-                pfProc += iOutWidth; // point to next start point in output buffer now
-                pfCurrKernel += iKernelSize; // point to next kernel row now
-            } // k_row
-        } // col
+                        _mm512_storeu_ps(pfProc + k_col, _mm512_add_ps(_mm512_load_ps(pfCurrKernel + k_col), _mm512_load_ps(pfProc + k_col)));
+                    }
+                    // need to process last up to 15 floats separately..
+
+                    pfProc += iOutWidth; // point to next start point in output buffer now
+                    pfCurrKernel += iKernelSize; // point to next kernel row now
+                } // k_row
+            } // col
+        }
+        else if (avx2)
+        {
+            for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+            {
+                unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+                // fast skip zero
+                if (ucInpSample == 0) continue;
+
+                float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+
+                float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+                for (k_row = 0; k_row < iKernelSize; k_row++)
+                {
+                     // add full kernel row to output - AVX2
+                    for (k_col = 0; k_col < iKernelSize; k_col += 8)
+                    {
+                        _mm256_storeu_ps(pfProc + k_col, _mm256_add_ps(_mm256_load_ps(pfCurrKernel + k_col), _mm256_load_ps(pfProc + k_col)));
+                    }
+                    // need to process last up to 7 floats separately..
+
+                    pfProc += iOutWidth; // point to next start point in output buffer now
+                    pfCurrKernel += iKernelSize; // point to next kernel row now
+                } // k_row
+            } // col
+        }
+        else if (sse41)
+        {
+            for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+            {
+                unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+                // fast skip zero
+                if (ucInpSample == 0) continue;
+
+                float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+
+                float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+                for (k_row = 0; k_row < iKernelSize; k_row++)
+                {
+                    // add full kernel row to output - SSE
+                    for (k_col = 0; k_col < iKernelSize; k_col += 4)
+                    {
+                        _mm_storeu_ps(pfProc + k_col, _mm_add_ps(_mm_load_ps(pfCurrKernel + k_col), _mm_load_ps(pfProc + k_col)));
+                    }
+                    // need to process last up to 3 floats separately..
+
+                    pfProc += iOutWidth; // point to next start point in output buffer now
+                    pfCurrKernel += iKernelSize; // point to next kernel row now
+                } // k_row
+            } // col
+        }
+        else
+        {
+            for (col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+            {
+                unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+                // fast skip zero
+                if (ucInpSample == 0) continue;
+
+                float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
+
+                float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+                for (k_row = 0; k_row < iKernelSize; k_row++)
+                {
+                    // add full kernel row to output - C
+                    for (k_col = 0; k_col < iKernelSize; k_col++)
+                    {
+                        pfProc[k_col] += pfCurrKernel[k_col];
+                    } // k_col
+                    pfProc += iOutWidth; // point to next start point in output buffer now
+                    pfCurrKernel += iKernelSize; // point to next kernel row now
+                } // k_row
+            } // col
+        }
     } // row
 
    

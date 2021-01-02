@@ -56,6 +56,9 @@ class JincResize : public GenericVideoFilter
     int64_t iWidth, iHeight;
     int64_t iWidthEl, iHeightEl;
 
+    bool avx512;
+    bool avx2;
+    bool sse41;
     
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
