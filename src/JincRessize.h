@@ -41,6 +41,25 @@ class JincResize : public GenericVideoFilter
     float peak;
     int threads_;
 
+    bool bAddProc;
+    unsigned char *g_pElImageBuffer;
+    float* g_pfImageBuffer = 0, * g_pfFilteredImageBuffer = 0;
+    int64_t SzFilteredImageBuffer;
+    float* pfEndOfFilteredImageBuffer;
+
+    float *g_pfKernel = 0;
+    float* g_pfKernelWeighted = 0;
+
+    int64_t iKernelSize;
+    int64_t iMul;
+    int64_t iTaps;
+    int64_t iWidth, iHeight;
+    int64_t iWidthEl, iHeightEl;
+
+    bool avx512;
+    bool avx2;
+    bool sse41;
+    
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
     template <typename T>
@@ -52,6 +71,9 @@ class JincResize : public GenericVideoFilter
 
     void(JincResize::*process_frame)(EWAPixelCoeff**, PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
+    void fill2DKernel(void);
+    void KernelProc(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
@@ -60,6 +82,7 @@ public:
         return cachehints == CACHE_GET_MTMODE ? MT_MULTI_INSTANCE : 0;
     }
     ~JincResize();
+    
 };
 
 class Arguments
