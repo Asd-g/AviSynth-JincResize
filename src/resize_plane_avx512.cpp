@@ -22,6 +22,15 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
         const __m512 min_val = (i && !vi.IsRGB()) ? _mm512_set1_ps(-0.5f) : _mm512_setzero_ps();
 
+        if (bAddProc)
+        {
+            const int src_width = src->GetRowSize(plane) / pixel_size;
+            const int src_height = src->GetHeight(plane);
+            unsigned char* dstp_add = reinterpret_cast<unsigned char*>(dst->GetWritePtr(plane));
+            KernelProc((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
+            continue;
+        }
+
 #pragma omp parallel for num_threads(threads_)
         for (int y = 0; y < dst_height; ++y)
         {

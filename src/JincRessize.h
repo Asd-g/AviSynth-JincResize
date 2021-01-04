@@ -55,10 +55,6 @@ class JincResize : public GenericVideoFilter
     int64_t iTaps;
     int64_t iWidth, iHeight;
     int64_t iWidthEl, iHeightEl;
-
-    bool avx512;
-    bool avx2;
-    bool sse41;
     
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
@@ -73,6 +69,12 @@ class JincResize : public GenericVideoFilter
 
     void fill2DKernel(void);
     void KernelProc(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+
+    void KernelRow_c(int64_t iOutWidth);
+    void KernelRow_sse41(int64_t iOutWidth);
+    void KernelRow_avx2(int64_t iOutWidth);
+    void KernelRow_avx512(int64_t iOutWidth);
+    void(JincResize::* KernelRow)(int64_t iOutWidth);
 
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);
