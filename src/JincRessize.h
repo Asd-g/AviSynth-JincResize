@@ -50,16 +50,19 @@ class JincResize : public GenericVideoFilter
     unsigned char *g_pElImageBuffer;
     float* g_pfImageBuffer = 0, * g_pfFilteredImageBuffer = 0;
     int64_t SzFilteredImageBuffer;
-    float* pfEndOfFilteredImageBuffer;
+ //   float* pfEndOfFilteredImageBuffer;
 
     float *g_pfKernel = 0;
     float* g_pfKernelWeighted = 0;
+    float* g_pfKernelParProc = 0;
+    int iParProc;
     KrnRowUsefulRange* pKrnRUR;
-    float* pfHistTable;
+
     unsigned char ucFVal;
 
     int64_t iKernelSize;
-    int64_t iKernelStride; // Kernel stride > Kernel line size to have place reading zeroes at SIMD wide registers loading
+ //   int64_t iKernelStride; // Kernel stride > Kernel line size to have place reading zeroes at SIMD wide registers loading
+    int64_t iKernelStridePP; // kernel stride for parallel samples in row processing, aligned to size of SIMD register
     int64_t iMul;
     int64_t iTaps;
     int64_t iWidth, iHeight;
@@ -84,12 +87,14 @@ class JincResize : public GenericVideoFilter
     void KernelRow_sse41(int64_t iOutWidth);
     void KernelRow_avx2(int64_t iOutWidth);
     void KernelRow_avx2_mul(int64_t iOutWidth);
-     void KernelRow_avx512(int64_t iOutWidth);
+    void KernelRow_avx2_mul2_taps8(int64_t iOutWidth);
+    void KernelRow_avx2_mul8_taps2(int64_t iOutWidth);
+    void KernelRow_avx2_mul8_taps3(int64_t iOutWidth);
+    void KernelRow_avx2_mul4_taps4(int64_t iOutWidth);
+
+    void KernelRow_avx512(int64_t iOutWidth);
     void(JincResize::* KernelRow)(int64_t iOutWidth);
 
-    // unfortunately calling in high-loaded SIMD cycle cause significant performance degradation. may be inline somehow ?
-    void AVX2Row32(int64_t k_col_x, float *pfProc, float *pfCurrKernel_pos, float *pfSample);
-    void(JincResize::* AVX2Row)(int64_t k_col_x, float* pfProc, float* pfCurrKernel_pos, float *pfSample);
 
 public:
     JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);

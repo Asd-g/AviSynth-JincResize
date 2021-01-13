@@ -552,8 +552,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: blur must be between 0.0..10.0.");
     if (opt == 3 && !(env->GetCPUFlags() & CPUF_AVX512F))
         env->ThrowError("JincResize: opt=3 requires AVX-512F.");
-    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2))
-        env->ThrowError("JincResize: opt=2 requires AVX2.");
+    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2) && !(env->GetCPUFlags() & CPUF_FMA3))
+        env->ThrowError("JincResize: opt=2 requires AVX2 and FMA3.");
     if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
 
@@ -623,18 +623,26 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 //        iMul = static_cast<int64_t>(iMultH);
         iTaps = static_cast<int64_t>(tap);
         iKernelSize = (iMul * iTaps * 2);
-        iKernelStride = (iKernelSize + iMul * 8); // may be larger for AVX512... need testing.
+        iParProc = 4; // number of parallel processed samples in 1 SIMD pass
+        iKernelStridePP = iKernelSize + 8; // may be +16 for AVX512
+        if ((iKernelStridePP % 32) != 0)
+        {
+            iKernelStridePP += 32 - (iKernelStridePP % 32);// num of Kernel line bytes must be mul of 32 bytes (64 for avx512 ?)
+        }
+        
+        // start rows of kernel buf g_pfKernelParProc must be 32-bytes aligned 
 
-        g_pfKernel = new float[iKernelStride * iKernelSize];
-        memset(g_pfKernel, 0, iKernelStride * iKernelSize * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
+        g_pfKernel = (float*)_mm_malloc(iKernelSize * iKernelSize * sizeof(float), 32);
+        memset(g_pfKernel, 0, iKernelSize * iKernelSize * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
 
-        g_pfKernelWeighted = new float[iKernelStride * iKernelSize * 256];
-        memset(g_pfKernelWeighted, 0, iKernelStride * iKernelSize * sizeof(float) * 256);
+        g_pfKernelParProc = (float*)_mm_malloc(iKernelStridePP * iKernelSize * iParProc * sizeof(float), 32);
+        memset(g_pfKernelParProc, 0, iKernelStridePP * iKernelSize * iParProc * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
 
-        pKrnRUR = new KrnRowUsefulRange[iKernelStride * sizeof(KrnRowUsefulRange)];
-        memset(pKrnRUR, 0, iKernelStride * sizeof(KrnRowUsefulRange));
+        g_pfKernelWeighted = (float*)_mm_malloc(iKernelSize * iKernelSize * 256 * sizeof(float), 32);
+        memset(g_pfKernelWeighted, 0, iKernelSize * iKernelSize * sizeof(float) * 256);
 
-        pfHistTable = new float[256]; // histogram for 8bit input samples
+        pKrnRUR = new KrnRowUsefulRange[iKernelSize * sizeof(KrnRowUsefulRange)];
+        memset(pKrnRUR, 0, iKernelSize * sizeof(KrnRowUsefulRange));
 
         fill2DKernel();
 
@@ -648,7 +656,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
         SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
         g_pfFilteredImageBuffer = (float*)malloc(SzFilteredImageBuffer);
-        pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
+ //       pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
         
     }
     else
@@ -691,7 +699,13 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     else if (avx2)
     {
         if (bAddProc)
-            KernelRow = &JincResize::KernelRow_avx2_mul;
+        {
+          if (iMul == 4 && iTaps == 4)  KernelRow = &JincResize::KernelRow_avx2_mul4_taps4;
+          else  
+              if (iMul == 8 && iTaps == 3)  KernelRow = &JincResize::KernelRow_avx2_mul8_taps3;
+                  else
+                   KernelRow = &JincResize::KernelRow_avx2_mul;
+        }
 
         switch (vi.ComponentSize())
         {
@@ -794,10 +808,10 @@ void JincResize::fill2DKernel(void)
                     fW = 1.0f;
                 }
 
-                g_pfKernel[i * iKernelStride + j + (iKernelStride-iKernelSize)/2] = fBess * fW;
+                g_pfKernel[i * iKernelSize + j] = fBess * fW;
             }
             else
-                g_pfKernel[i * iKernelStride + j + (iKernelStride-iKernelSize)/2] = 1.0f;
+                g_pfKernel[i * iKernelSize + j] = 1.0f;
 
 
         } //j
@@ -808,30 +822,30 @@ void JincResize::fill2DKernel(void)
     float fSum = 0.0f;
     for (i = 0; i < iKernelSize; i++)
     {
-        for (j = 0; j < iKernelStride; j++)
+        for (j = 0; j < iKernelSize; j++)
         {
-            fSum += g_pfKernel[i * iKernelStride + j];
+            fSum += g_pfKernel[i * iKernelSize + j];
         }
     }
 
     for (i = 0; i < iKernelSize; i++)
     {
-        for (j = 0; j < iKernelStride; j++)
+        for (j = 0; j < iKernelSize; j++)
         {
-            g_pfKernel[i * iKernelStride + j] /= fSum;
-            g_pfKernel[i * iKernelStride + j] *= (iMul * iMul); // energy dissipated at iMul^2 output samples, so 1 norm * iMul^2
+            g_pfKernel[i * iKernelSize + j] /= fSum;
+            g_pfKernel[i * iKernelSize + j] *= (iMul * iMul); // energy dissipated at iMul^2 output samples, so 1 norm * iMul^2
         }
     }
 
     // fill 256 kernel images weighted by 8bit unsigned int
     for (int64_t iSample = 1; iSample < 256; iSample++) // skip 0 - memory was memset to 0.
     {
-        float* pfCurrKernel = g_pfKernelWeighted + iSample * iKernelStride * iKernelSize;
+        float* pfCurrKernel = g_pfKernelWeighted + iSample * iKernelSize * iKernelSize;
         for (i = 0; i < iKernelSize; i++)
         {
             for (j = 0; j < iKernelSize; j++)
             {
-                pfCurrKernel[i * iKernelStride + j + (iKernelStride - iKernelSize) / 2] = g_pfKernel[i * iKernelStride + j + (iKernelStride - iKernelSize) / 2] * iSample;
+                pfCurrKernel[i * iKernelSize + j] = g_pfKernel[i * iKernelSize + j] * iSample;
             }
         }
     }
@@ -873,32 +887,17 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
 
     memset(g_pfFilteredImageBuffer, 0, (iWidthEl * iHeightEl * iMul * iMul * sizeof(float)));
 
- //   memset(pfHistTable, 0, 256);
-
     // fill center
     for (row = 0; row < iInpHeight; row++)
     {
         for (col = 0; col < iInpWidth; col++)
         {
-            // read inp sample
-            unsigned char ucInpSample = src[(row * iSrcStride + col)];
-            g_pElImageBuffer[(row + iKernelSize) * iWidthEl + (col + iKernelSize)] = ucInpSample;//src[(row * iSrcStride + col)];
- //           pfHistTable[ucInpSample]++;
-        }
+            g_pElImageBuffer[(row + iKernelSize) * iWidthEl + (col + iKernelSize)] = src[(row * iSrcStride + col)];
+        } 
+//        memcpy(g_pElImageBuffer + (row + iKernelSize) * iWidthEl + iKernelSize, src + (row * iSrcStride), iInpWidth * sizeof(float)); - need debug
+
     }
-    /*
-    //find most frequent sample value
-    ucFVal = 0;
-    float fMaxVal = 0;
-    for (int64_t i = 0; i < 256; i++)
-    {
-        if (pfHistTable[i] > fMaxVal)
-        {
-            fMaxVal = pfHistTable[i];
-            ucFVal = i;
-        }
-    }
-    */
+
     // fill upper strip - dup 1st line
     for (row = 0; row < iKernelSize; row++)
     {
@@ -934,12 +933,14 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
         }
     }
  
-
+ 
     // 2d convolution pass - read kernel lut and add row to row
     int64_t iOutWidth = iWidthEl * iMul;
 
     (this->*KernelRow)(iOutWidth);
-
+   
+#pragma omp parallel for num_threads(threads_) // really slow float to int conversion - need soon be put to SIMD
+    // need to put SIMD versions too
     for (row = 0; row < iInpHeight * iMul; row++)
     {
         for (col = 0; col < iInpWidth * iMul; col++)
@@ -947,7 +948,6 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
             unsigned char ucVal;
             float fVal = g_pfFilteredImageBuffer[(row + iKernelSize * iMul) * iWidthEl * iMul + col + iKernelSize * iMul]; 
 
- //           fVal += (0.5f + (float)ucFVal);
             fVal += 0.5f;
 
             if (fVal > 255.0f)
@@ -963,6 +963,7 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
             dst[(row * iDstStride + col)] = ucVal;
         }
     }
+    
 }
 
 void JincResize::KernelRow_c(int64_t iOutWidth)
@@ -982,7 +983,7 @@ void JincResize::KernelRow_c(int64_t iOutWidth)
             // fast skip zero
             if (ucInpSample == 0) continue;
 
-            float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelStride * iKernelSize + (iKernelStride-iKernelSize)/2;
+            float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
 
             float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
 
@@ -994,7 +995,7 @@ void JincResize::KernelRow_c(int64_t iOutWidth)
                     pfProc[k_col] += pfCurrKernel[k_col];
                 } // k_col
                 pfProc += iOutWidth; // point to next start point in output buffer now
-                pfCurrKernel += iKernelStride; // point to next kernel row now
+                pfCurrKernel += iKernelSize; // point to next kernel row now
             } // k_row
         } // col
     }
@@ -1002,7 +1003,7 @@ void JincResize::KernelRow_c(int64_t iOutWidth)
 
 void JincResize::KernelRow_c_mul(int64_t iOutWidth)
 {
-    float* pfCurrKernel = g_pfKernel + (iKernelStride - iKernelSize) / 2; 
+    float* pfCurrKernel = g_pfKernel; 
 
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
@@ -1026,7 +1027,7 @@ void JincResize::KernelRow_c_mul(int64_t iOutWidth)
                     pfProc[k_col] += pfCurrKernel_pos[k_col] * ucInpSample;
                 } // k_col 
                 pfProc += iOutWidth; // point to next start point in output buffer now
-                pfCurrKernel_pos += iKernelStride; // point to next kernel row now
+                pfCurrKernel_pos += iKernelSize; // point to next kernel row now
             } // k_row
         } // col
     }
@@ -1045,10 +1046,10 @@ JincResize::~JincResize()
 
     if (bAddProc)
     {
-        delete g_pfKernel;
-        delete g_pfKernelWeighted;
+        _mm_free(g_pfKernel);
+        _mm_free(g_pfKernelWeighted);
+        _mm_free(g_pfKernelParProc);
         delete pKrnRUR;
-        delete pfHistTable;
         free(g_pElImageBuffer);
         free(g_pfFilteredImageBuffer);
     }
