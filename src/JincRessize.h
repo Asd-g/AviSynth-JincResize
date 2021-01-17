@@ -20,13 +20,19 @@ struct EWAPixelCoeff
     int filter_size, quantize_x, quantize_y, coeff_stride;
 };
 
+enum Weighting
+{
+    JINC,
+    TRAPEZOIDAL
+};
+
 class Lut
 {
     int lut_size = 1024;
 
 public:
     Lut();
-    void InitLut(int lut_size, double radius, double blur);
+    void InitLut(int lut_size, double radius, double blur, Weighting Weighting_type);
     float GetFactor(int index);
 
     double* lut;
@@ -45,6 +51,8 @@ class JincResize : public GenericVideoFilter
     bool has_at_least_v8;
     float peak;
     int threads_;
+
+    Weighting Weighting_type;
 
     bool bAddProc;
     unsigned char *g_pElImageBuffer;
@@ -88,16 +96,19 @@ class JincResize : public GenericVideoFilter
     void KernelRow_avx2(int64_t iOutWidth);
     void KernelRow_avx2_mul(int64_t iOutWidth);
     void KernelRow_avx2_mul2_taps8(int64_t iOutWidth);
-    void KernelRow_avx2_mul8_taps2(int64_t iOutWidth);
     void KernelRow_avx2_mul8_taps3(int64_t iOutWidth);
     void KernelRow_avx2_mul4_taps4(int64_t iOutWidth);
+    void KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth);
+    void ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+    void ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 
     void KernelRow_avx512(int64_t iOutWidth);
     void(JincResize::* KernelRow)(int64_t iOutWidth);
+    void(JincResize::* ConvertToInt)(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 
 
 public:
-    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);
+    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, int wt, int ap, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     int __stdcall SetCacheHints(int cachehints, int frame_range)
     {
@@ -109,8 +120,8 @@ public:
 
 class Arguments
 {
-    AVSValue _args[12];
-    const char* _arg_names[12];
+    AVSValue _args[14];
+    const char* _arg_names[14];
     int _idx;
 
 public:
