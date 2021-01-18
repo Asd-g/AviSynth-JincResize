@@ -9,7 +9,7 @@ void JincResize::KernelRow_avx2(int64_t iOutWidth)
 {
     const int k_col8 = iKernelSize - (iKernelSize % 8);
 
-#pragma omp parallel for num_threads(threads_) // do not works for x64 and VS2019 compiler still - need to fix (pointers ?)
+#pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here
@@ -399,9 +399,9 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
     float* pfCurrKernel = g_pfKernel;
 
     /* iMul=4, iTaps=4, KernelSize (row length in floats) is 32*/
-    /* unfinished full row-walking*/
+    /* full row-walking, fixed at 19.01.2021 and need to be tested */
 
-//#pragma omp parallel for num_threads(threads_) 
+#pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here 
@@ -437,14 +437,8 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
             my_ymm5 = _mm256_load_ps(pfProc + 40);
             my_ymm6 = _mm256_load_ps(pfProc + 48);
 
-
             for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
             {
- /*               if (g_pElImageBuffer[(iInpPtrRowStart + col +0)] == 230 && (k_row == 15))
-                {
-                int idbr = 1;
-                }
-                */
                 // odd samples
                 my_ymm8 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm8), g_pElImageBuffer[(iInpPtrRowStart + col)])); // 1
                 my_ymm9 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm9), g_pElImageBuffer[(iInpPtrRowStart + col + 2)])); // 3
@@ -485,7 +479,7 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 my_ymm4 = _mm256_permute2f128_ps(my_ymm4, my_ymm5, 33);
                 my_ymm5 = _mm256_permute2f128_ps(my_ymm5, my_ymm6, 33);
                 my_ymm6 = _mm256_permute2f128_ps(my_ymm6, my_ymm6, 49);
-                my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 44), 1);
+                my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 56), 1);
 
                 // even samples
                 my_ymm8 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm8), g_pElImageBuffer[(iInpPtrRowStart + col + 1)])); // 2
@@ -521,21 +515,14 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 _mm256_store_ps(pfProc + 12, my_ymm1);
                 _mm256_store_ps(pfProc + 20, my_ymm2);
                 _mm_store_ps(pfProc + 28, _mm256_castps256_ps128(my_ymm3));
-  /*              my_ymm0 = _mm256_permute2f128_ps(my_ymm0, my_ymm1, 33);
-                my_ymm1 = _mm256_permute2f128_ps(my_ymm1, my_ymm2, 33);
-                my_ymm2 = _mm256_permute2f128_ps(my_ymm2, my_ymm3, 33);
-                my_ymm3 = _mm256_permute2f128_ps(my_ymm3, my_ymm4, 33);
-                my_ymm4 = _mm256_permute2f128_ps(my_ymm4, my_ymm5, 33);
-                my_ymm5 = _mm256_permute2f128_ps(my_ymm5, my_ymm6, 33);
-                my_ymm6 = _mm256_permute2f128_ps(my_ymm6, my_ymm6, 49);
-                my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 48), 1);
-    */            
+
                 pfProc += 8*iMul;
 
-                my_ymm0 = _mm256_load_ps(pfProc);
-                my_ymm1 = _mm256_load_ps(pfProc + 8);
-                my_ymm2 = _mm256_load_ps(pfProc + 16);
-                my_ymm3 = _mm256_load_ps(pfProc + 24);
+                my_ymm0 = my_ymm4;
+                my_ymm1 = my_ymm5;
+                my_ymm2 = my_ymm6;
+
+                my_ymm3 = _mm256_load_ps(pfProc + 24); // may be read out of g_pfFilteredImageBuffer at last col - may be need of pad buffer or other fix
                 my_ymm4 = _mm256_load_ps(pfProc + 32);
                 my_ymm5 = _mm256_load_ps(pfProc + 40);
                 my_ymm6 = _mm256_load_ps(pfProc + 48);
