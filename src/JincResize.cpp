@@ -631,9 +631,6 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
     bAddProc = false;
 
- 
-
-
     // check if target widh and height are both integer and same multipliers
     float fMultH = (float)(target_width / src_width);
     float fMultV = (float)(target_height / src_height);
@@ -685,6 +682,10 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
         SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
         g_pfFilteredImageBuffer = (float*)malloc(SzFilteredImageBuffer);
+
+        // buffer to hold temp converted to float32 input line for each processing thread
+	float *pfInpFloatRow = (float*)_mm_malloc(iWidthEl * iMul * threads_ * sizeof(float));
+
  //       pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
         
     }
@@ -714,6 +715,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
     ConvertToInt = &JincResize::ConvertToInt_c; // default
+    ConvertInpElRowToFloat = &JincResize::ConvertInpElRowToFloat_c; // default
 
     if (avx512)
     {
@@ -737,6 +739,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
           else  KernelRow = &JincResize::KernelRow_avx2_mul;
 
           ConvertToInt = &JincResize::ConvertToInt_avx2;
+//	  ConvertInpElRowToFloat = &JincResize::ConvertInpElRowToFloat_avx2; // TO DO and debug later
+
         }
 
         switch (vi.ComponentSize())
@@ -1011,6 +1015,14 @@ void JincResize::ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* ds
     }
 }
 
+void JincResize::ConvertInpElRowToFloat_c(int64_t iWidth, unsigned char *src, float *dst)
+{
+    for (int64_t col=0; col < iWidth; col++)
+	{
+	  dst[col] = (float)src[col];
+	}
+}
+
 void JincResize::KernelRow_c(int64_t iOutWidth)
 {
 #pragma omp parallel for num_threads(threads_) 
@@ -1097,6 +1109,7 @@ JincResize::~JincResize()
         delete pKrnRUR;
         free(g_pElImageBuffer);
         free(g_pfFilteredImageBuffer);
+	_mm_free(pfInpFloatRow);
     }
 }
 

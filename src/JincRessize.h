@@ -56,7 +56,7 @@ class JincResize : public GenericVideoFilter
 
     bool bAddProc;
     unsigned char *g_pElImageBuffer;
-    float* g_pfImageBuffer = 0, * g_pfFilteredImageBuffer = 0;
+    float *g_pfImageBuffer = 0, *g_pfFilteredImageBuffer = 0, *pfInpFloatRow = 0;
     int64_t SzFilteredImageBuffer;
  //   float* pfEndOfFilteredImageBuffer;
 
@@ -91,7 +91,7 @@ class JincResize : public GenericVideoFilter
     void KernelProc(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 
     void KernelRow_c(int64_t iOutWidth);
-    void KernelRow_c_mul(int64_t iOutWidth);
+    void KernelRow_c_mul(int64_t iOutWidth); // TO DO : add full row-walking c-version too
     void KernelRow_sse41(int64_t iOutWidth);
     void KernelRow_avx2(int64_t iOutWidth);
     void KernelRow_avx2_mul(int64_t iOutWidth);
@@ -101,10 +101,13 @@ class JincResize : public GenericVideoFilter
     void KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth);
     void ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
     void ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+    void ConvertInpElRowToFloat_c(int64_t iWidth, unsigned char *src, float *dst);
+    void ConvertInpElRowToFloat_avx2(int64_t iWidth, unsigned char *src, float *dst);
 
     void KernelRow_avx512(int64_t iOutWidth);
     void(JincResize::* KernelRow)(int64_t iOutWidth);
     void(JincResize::* ConvertToInt)(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+    void(JincResize::* ConvertInpElRowToFloat)(int64_t iWidth, unsigned char *src, float *dst);
 
 
 public:

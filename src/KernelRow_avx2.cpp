@@ -399,21 +399,28 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
     float* pfCurrKernel = g_pfKernel;
 
     /* iMul=4, iTaps=4, KernelSize (row length in floats) is 32*/
-    /* full row-walking, fixed at 19.01.2021 and need to be tested */
+    /* full row-walking, fixed at 19.01.2021 and need to be tested 
+       added ConvertInpElRowToFloat stuff 22.01.2021 and need to be tested too */
 
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here 
         int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
-        int64_t iInpPtrRowStart = row * iWidthEl;
+
+	// prepare float32 pre-converted row data for each threal separately
+	int64_t tidx = omp_get_thread_num();
+        float *pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * sizeof(float32) * iWidthEl;
+        (this->*ConvertInpElRowToFloat)(iWidthEl, g_pElImageBuffer + row * iWidthEl, pfInpRowSamplesFloatBufStart); 
+	// lets hope now converted to float32 one row inp samples in L1d cache.
 
         for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
         {
 
-            float* pfCurrKernel_pos = pfCurrKernel + iKernelSize * k_row;
+            float *pfCurrKernel_pos = pfCurrKernel + iKernelSize * k_row;
 
-            float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + iTaps * iMul + k_row * iOutWidth;
+            float *pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + iTaps * iMul + k_row * iOutWidth;
+
 
             __m256 my_ymm0, my_ymm1, my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
             __m256 my_ymm8, my_ymm9, my_ymm10, my_ymm11; // inp samples
@@ -440,10 +447,10 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
             for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
             {
                 // odd samples
-                my_ymm8 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm8), g_pElImageBuffer[(iInpPtrRowStart + col)])); // 1
-                my_ymm9 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm9), g_pElImageBuffer[(iInpPtrRowStart + col + 2)])); // 3
-                my_ymm10 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm10), g_pElImageBuffer[(iInpPtrRowStart + col + 4)])); // 5
-                my_ymm11 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm11), g_pElImageBuffer[(iInpPtrRowStart + col + 6)])); // 7            
+		my_ymm8 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col); // 1
+                my_ymm9 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 2); // 3
+                my_ymm10 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 4); // 5
+                my_ymm11 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 6); // 7            
 
                  // 1st sample
                 my_ymm0 = _mm256_fmadd_ps(my_ymm12, my_ymm8, my_ymm0);
@@ -482,10 +489,11 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 56), 1);
 
                 // even samples
-                my_ymm8 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm8), g_pElImageBuffer[(iInpPtrRowStart + col + 1)])); // 2
-                my_ymm9 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm9), g_pElImageBuffer[(iInpPtrRowStart + col + 3)])); // 4
-                my_ymm10 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm10), g_pElImageBuffer[(iInpPtrRowStart + col + 5)])); // 6
-                my_ymm11 = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm11), g_pElImageBuffer[(iInpPtrRowStart + col + 7)])); // 8            
+		my_ymm8 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 1); // 2
+                my_ymm9 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 3); // 4
+                my_ymm10 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 5); // 6
+                my_ymm11 = _mm256_broadcastss_ps(pfInpRowSamplesFloatBufStart + col + 7); // 8            
+
 
                  // 2nd sample
                 my_ymm0 = _mm256_fmadd_ps(my_ymm12, my_ymm8, my_ymm0);
