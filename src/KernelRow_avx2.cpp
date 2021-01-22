@@ -1,3 +1,5 @@
+#include <omp.h>
+
 #include "JincRessize.h"
 /*
 #if !defined(__AVX2__)
@@ -410,7 +412,7 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
 
 	// prepare float32 pre-converted row data for each threal separately
 	int64_t tidx = omp_get_thread_num();
-        float *pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * sizeof(float32) * iWidthEl;
+        float *pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * sizeof(float) * iWidthEl;
         (this->*ConvertInpElRowToFloat)(iWidthEl, g_pElImageBuffer + row * iWidthEl, pfInpRowSamplesFloatBufStart); 
 	// lets hope now converted to float32 one row inp samples in L1d cache.
 
@@ -447,10 +449,10 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
             for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
             {
                 // odd samples
-		my_ymm8 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col); // 1
-                my_ymm9 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 2); // 3
-                my_ymm10 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 4); // 5
-                my_ymm11 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 6); // 7            
+		my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col); // 1
+                my_ymm9 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 2); // 3
+                my_ymm10 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 4); // 5
+                my_ymm11 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 6); // 7            
 
                  // 1st sample
                 my_ymm0 = _mm256_fmadd_ps(my_ymm12, my_ymm8, my_ymm0);
@@ -489,10 +491,10 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 56), 1);
 
                 // even samples
-		my_ymm8 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 1); // 2
-                my_ymm9 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 3); // 4
-                my_ymm10 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 5); // 6
-                my_ymm11 = _mm256_broadcastss(pfInpRowSamplesFloatBufStart + col + 7); // 8            
+		my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 1); // 2
+                my_ymm9 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 3); // 4
+                my_ymm10 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 5); // 6
+                my_ymm11 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 7); // 8            
 
 
                  // 2nd sample

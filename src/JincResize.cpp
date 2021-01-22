@@ -684,7 +684,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         g_pfFilteredImageBuffer = (float*)malloc(SzFilteredImageBuffer);
 
         // buffer to hold temp converted to float32 input line for each processing thread
-	float *pfInpFloatRow = (float*)_mm_malloc(iWidthEl * iMul * threads_ * sizeof(float));
+        float* pfInpFloatRow = (float*)_mm_malloc(iWidthEl * iMul * threads_ * sizeof(float), 32);
 
  //       pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
         
