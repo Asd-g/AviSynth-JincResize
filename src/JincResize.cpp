@@ -238,7 +238,7 @@ Lut::Lut()
     lut = new double[lut_size];
 }
 
-void Lut::InitLut(int lut_size, double radius, double blur)
+void Lut::InitLut(int lut_size, double radius, double blur, Weighting Weighting_type)
 {
     auto radius2 = radius * radius;
     auto blur2 = blur * blur;
@@ -247,8 +247,25 @@ void Lut::InitLut(int lut_size, double radius, double blur)
     {
         auto t2 = i / (lut_size - 1.0);
         double filter = sample_sqr(jinc_sqr, radius2 * t2, blur2, radius2);
-        double window = sample_sqr(jinc_sqr, JINC_ZERO_SQR * t2, 1.0, radius2);
-        lut[i] = filter * window;
+        if (Weighting_type == JINC)
+        {
+            double window = sample_sqr(jinc_sqr, JINC_ZERO_SQR * t2, 1.0, radius2);
+            lut[i] = filter * window;
+        }
+        else if (Weighting_type == TRAPEZOIDAL)
+        {
+            // trapezoidal window
+            double window = (2 - (2 * t2));
+
+            if (window < 1)
+            {
+                lut[i] = filter * window;
+            }
+            else
+                lut[i] = filter;
+        }
+        // else - assert Wt == undefined ?
+
     }
 }
 
@@ -535,7 +552,7 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
 }
 
 
-JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env)
+JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, int wt, int ap, IScriptEnvironment* env)
     : GenericVideoFilter(_child), threads_(threads)
 {
     if (!vi.IsPlanar())
@@ -552,10 +569,14 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: blur must be between 0.0..10.0.");
     if (opt == 3 && !(env->GetCPUFlags() & CPUF_AVX512F))
         env->ThrowError("JincResize: opt=3 requires AVX-512F.");
-    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2))
-        env->ThrowError("JincResize: opt=2 requires AVX2.");
+    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2) && !(env->GetCPUFlags() & CPUF_FMA3))
+        env->ThrowError("JincResize: opt=2 requires AVX2 and FMA3.");
     if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
+    if (wt < 0 || wt > 1)
+        env->ThrowError("JincResize: Weighting type must be between 0..1.");
+    if (ap < 0 || ap > 1)
+        env->ThrowError("JincResize: Proc type must be between 0..1.");
 
     const int thr = std::thread::hardware_concurrency();
     if (threads_ == 0)
@@ -584,8 +605,13 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
     double radius = jinc_zeros[tap - 1];
     int samples = 1024;  // should be a multiple of 4
+ 
+    if (wt == 0)
+        Weighting_type = JINC;
+    else if (wt == 1) Weighting_type = TRAPEZOIDAL;
+
     init_lut = new Lut();
-    init_lut->InitLut(samples, radius, blur);
+    init_lut->InitLut(samples, radius, blur, Weighting_type);
     int sub_w, sub_h;
     double div_w, div_h;
     planecount = min(vi.NumComponents(), 3);
@@ -610,9 +636,9 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     float fMultV = (float)(target_height / src_height);
     if (fMultH == fMultV)
     {
-        if ((fMultH - (long)fMultH) == 0 && (fMultV - (long)fMultV == 0)) // lookls like both integer
+        if ((fMultH - (long)fMultH) == 0 && (fMultV - (long)fMultV == 0)) // looks like both integer
         {
-            bAddProc = true;
+            if (ap == 1) bAddProc = true; // AddProc enabled now with ap arg = 1
             iMul = (int64_t)fMultH;
         }
     }
@@ -623,12 +649,26 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 //        iMul = static_cast<int64_t>(iMultH);
         iTaps = static_cast<int64_t>(tap);
         iKernelSize = (iMul * iTaps * 2);
+        iParProc = 4; // number of parallel processed samples in 1 SIMD pass
+        iKernelStridePP = iKernelSize + 8; // may be +16 for AVX512
+        if ((iKernelStridePP % 32) != 0)
+        {
+            iKernelStridePP += 32 - (iKernelStridePP % 32);// num of Kernel line bytes must be mul of 32 bytes (64 for avx512 ?)
+        }
+        
+        // start rows of kernel buf g_pfKernelParProc must be 32-bytes aligned 
 
-        g_pfKernel = new float[iKernelSize * iKernelSize];
-        memset(g_pfKernel, 0, iKernelSize * iKernelSize * sizeof(float));
+        g_pfKernel = (float*)_mm_malloc(iKernelSize * iKernelSize * sizeof(float), 32);
+        memset(g_pfKernel, 0, iKernelSize * iKernelSize * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
 
-        g_pfKernelWeighted = new float[iKernelSize * iKernelSize * 256];
+        g_pfKernelParProc = (float*)_mm_malloc(iKernelStridePP * iKernelSize * iParProc * sizeof(float), 32);
+        memset(g_pfKernelParProc, 0, iKernelStridePP * iKernelSize * iParProc * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
+
+        g_pfKernelWeighted = (float*)_mm_malloc(iKernelSize * iKernelSize * 256 * sizeof(float), 32);
         memset(g_pfKernelWeighted, 0, iKernelSize * iKernelSize * sizeof(float) * 256);
+
+        pKrnRUR = new KrnRowUsefulRange[iKernelSize * sizeof(KrnRowUsefulRange)];
+        memset(pKrnRUR, 0, iKernelSize * sizeof(KrnRowUsefulRange));
 
         fill2DKernel();
 
@@ -642,7 +682,11 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
         SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
         g_pfFilteredImageBuffer = (float*)malloc(SzFilteredImageBuffer);
-        pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
+
+        // buffer to hold temp converted to float32 input line for each processing thread
+	float *pfInpFloatRow = (float*)_mm_malloc(iWidthEl * iMul * threads_ * sizeof(float));
+
+ //       pfEndOfFilteredImageBuffer = g_pfFilteredImageBuffer + (iWidthEl * iHeightEl * iMul * iMul);
         
     }
     else
@@ -670,6 +714,9 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
     const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
+    ConvertToInt = &JincResize::ConvertToInt_c; // default
+    ConvertInpElRowToFloat = &JincResize::ConvertInpElRowToFloat_c; // default
+
     if (avx512)
     {
         if (bAddProc)
@@ -685,7 +732,16 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     else if (avx2)
     {
         if (bAddProc)
-            KernelRow = &JincResize::KernelRow_avx2;
+        {
+          if (iMul == 4 && iTaps == 4)  KernelRow = &JincResize::KernelRow_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
+//          else if (iMul == 8 && iTaps == 3)  KernelRow = &JincResize::KernelRow_avx2_mul8_taps3; // looks still slower in compare with old, may be avx512 will be faster
+//          else if (iMul == 2 && iTaps == 8)  KernelRow = &JincResize::KernelRow_avx2_mul2_taps8; - still unfinished
+          else  KernelRow = &JincResize::KernelRow_avx2_mul;
+
+          ConvertToInt = &JincResize::ConvertToInt_avx2;
+//	  ConvertInpElRowToFloat = &JincResize::ConvertInpElRowToFloat_avx2; // TO DO and debug later
+
+        }
 
         switch (vi.ComponentSize())
         {
@@ -709,7 +765,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     else
     {
         if (bAddProc)
-            KernelRow = &JincResize::KernelRow_c;
+            KernelRow = &JincResize::KernelRow_c_mul;
 
         switch (vi.ComponentSize())
         {
@@ -779,15 +835,25 @@ void JincResize::fill2DKernel(void)
             {
                 float fBess = 2.0f * std::cyl_bessel_jf(1, fArg) / fArg;
                 float fW; // Jinc window
-                if (fArg_w != 0)
+                if (Weighting_type == JINC)
                 {
-                    fW = 2.0f * std::cyl_bessel_jf(1, fArg_w) / fArg_w;
+                     if (fArg_w != 0)
+                     {
+                         fW = 2.0f * std::cyl_bessel_jf(1, fArg_w) / fArg_w;
+                     }
+                     else
+                     {
+                         fW = 1.0f;
+                     }
                 }
-                else
+                if (Weighting_type == TRAPEZOIDAL)
                 {
                     fW = 1.0f;
+                    if (fDist > (iKernelSize / 4))
+                    {
+                        fW = ((2 - (4 * fDist / iKernelSize))); // trapezoidal weighting
+                    }
                 }
-
                 g_pfKernel[i * iKernelSize + j] = fBess * fW;
             }
             else
@@ -832,6 +898,27 @@ void JincResize::fill2DKernel(void)
 
     // TO DO : 1. Make kernel half height. 2. Add run-length encoding for non-zero line length.
 
+    // fill kernel row useful range table
+    for (i = 0; i < iKernelSize; i++)
+    {
+        bool bStarted = false;
+        for (j = 0; j < iKernelSize; j++)
+        {
+            float fDist2 = sqrtf((float(iKernelSize / 2) - j) * (float(iKernelSize / 2) - j) + (float(iKernelSize / 2) - i) * (float(iKernelSize / 2) - i));
+            if ((fDist2 <= iKernelSize / 2) && !bStarted)
+            {
+                pKrnRUR[i].start_col = j;
+                bStarted = true;
+            }
+            if ((fDist2 > iKernelSize / 2) && bStarted)
+            {
+                pKrnRUR[i].end_col = j - 1;
+                bStarted = false;
+            }
+        }
+        if (bStarted) pKrnRUR[i].end_col = iKernelSize;
+    }
+
 }
 
 void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
@@ -846,17 +933,17 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
 
     memset(g_pfFilteredImageBuffer, 0, (iWidthEl * iHeightEl * iMul * iMul * sizeof(float)));
 
-
     // fill center
     for (row = 0; row < iInpHeight; row++)
     {
         for (col = 0; col < iInpWidth; col++)
         {
             g_pElImageBuffer[(row + iKernelSize) * iWidthEl + (col + iKernelSize)] = src[(row * iSrcStride + col)];
-        }
+        } 
+//        memcpy(g_pElImageBuffer + (row + iKernelSize) * iWidthEl + iKernelSize, src + (row * iSrcStride), iInpWidth * sizeof(float)); - need debug
+
     }
 
-    
     // fill upper strip - dup 1st line
     for (row = 0; row < iKernelSize; row++)
     {
@@ -892,18 +979,25 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
         }
     }
  
-
-    // 2d convolution pass - read kernel lut and add row to row
+ 
+    // 2d convolution pass
     int64_t iOutWidth = iWidthEl * iMul;
 
     (this->*KernelRow)(iOutWidth);
 
-    for (row = 0; row < iInpHeight * iMul; row++)
+    (this->*ConvertToInt)(iInpWidth, iInpHeight, dst, iDstStride);
+
+}
+
+void JincResize::ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{
+#pragma omp parallel for num_threads(threads_) 
+    for (int64_t row = 0; row < iInpHeight * iMul; row++)
     {
-        for (col = 0; col < iInpWidth * iMul; col++)
+        for (int64_t col = 0; col < iInpWidth * iMul; col++)
         {
             unsigned char ucVal;
-            float fVal = g_pfFilteredImageBuffer[(row + iKernelSize * iMul) * iWidthEl * iMul + col + iKernelSize * iMul]; 
+            float fVal = g_pfFilteredImageBuffer[(row + iKernelSize * iMul) * iWidthEl * iMul + col + iKernelSize * iMul];
 
             fVal += 0.5f;
 
@@ -914,17 +1008,24 @@ void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, i
             if (fVal < 0.0f)
             {
                 fVal = 0.0f;
-            } 
+            }
             ucVal = (unsigned char)fVal;
-
             dst[(row * iDstStride + col)] = ucVal;
         }
     }
 }
 
+void JincResize::ConvertInpElRowToFloat_c(int64_t iWidth, unsigned char *src, float *dst)
+{
+    for (int64_t col=0; col < iWidth; col++)
+	{
+	  dst[col] = (float)src[col];
+	}
+}
+
 void JincResize::KernelRow_c(int64_t iOutWidth)
 {
-#pragma omp parallel for num_threads(threads_) // do not works for x64 and VS2019 compiler still - need to fix (pointers ?)
+#pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here
@@ -946,12 +1047,44 @@ void JincResize::KernelRow_c(int64_t iOutWidth)
             for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
             {
                 // add full kernel row to output - C
-                for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+                for (int64_t k_col = pKrnRUR[k_row].start_col; k_col < pKrnRUR[k_row].end_col; k_col++)
                 {
                     pfProc[k_col] += pfCurrKernel[k_col];
                 } // k_col
                 pfProc += iOutWidth; // point to next start point in output buffer now
                 pfCurrKernel += iKernelSize; // point to next kernel row now
+            } // k_row
+        } // col
+    }
+}
+
+void JincResize::KernelRow_c_mul(int64_t iOutWidth)
+{
+    float* pfCurrKernel = g_pfKernel; 
+
+#pragma omp parallel for num_threads(threads_) 
+    for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+    {
+        // start all row-only dependent ptrs here
+        int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
+        int64_t iInpPtrRowStart = row * iWidthEl;
+
+        for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+        {
+            unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
+
+            float* pfCurrKernel_pos = pfCurrKernel;
+
+            float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
+
+            for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+            {
+                for (int64_t k_col = pKrnRUR[k_row].start_col; k_col < pKrnRUR[k_row].end_col; k_col++)
+                {
+                    pfProc[k_col] += pfCurrKernel_pos[k_col] * ucInpSample;
+                } // k_col 
+                pfProc += iOutWidth; // point to next start point in output buffer now
+                pfCurrKernel_pos += iKernelSize; // point to next kernel row now
             } // k_row
         } // col
     }
@@ -970,10 +1103,13 @@ JincResize::~JincResize()
 
     if (bAddProc)
     {
-        delete g_pfKernel;
-        delete g_pfKernelWeighted;
+        _mm_free(g_pfKernel);
+        _mm_free(g_pfKernelWeighted);
+        _mm_free(g_pfKernelParProc);
+        delete pKrnRUR;
         free(g_pElImageBuffer);
         free(g_pfFilteredImageBuffer);
+	_mm_free(pfInpFloatRow);
     }
 }
 
@@ -1005,6 +1141,8 @@ AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnviro
         args[10].AsFloat(0),
         args[11].AsInt(0),
         args[12].AsInt(-1),
+        args[13].AsInt(0),
+        args[14].AsInt(0),
         env);
 }
 
@@ -1028,6 +1166,10 @@ static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx 
         out_args->add(args[src_left_idx + 5], "quant_y");
     if (args[src_left_idx + 6].Defined())
         out_args->add(args[src_left_idx + 6], "threads");
+    if (args[src_left_idx + 7].Defined())
+        out_args->add(args[src_left_idx + 7], "wt");
+    if (args[src_left_idx + 8].Defined())
+        out_args->add(args[src_left_idx + 8], "ap");
 }
 
 template <int taps>
@@ -1048,7 +1190,8 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 {
     AVS_linkage = vectors;
 
-    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[threads]i[opt]i", Create_JincResize, 0);
+//    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[threads]i[opt]i", Create_JincResize, 0);
+    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[threads]i[opt]i[wt]i[ap]i", Create_JincResize, 0);
 
     env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<3>, 0);
     env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<4>, 0);
