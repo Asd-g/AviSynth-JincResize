@@ -1,5 +1,3 @@
-#include <omp.h>
-
 #include "JincRessize.h"
 /*
 #if !defined(__AVX2__)
@@ -7,85 +5,41 @@
 #endif
 */ // VS2019 for unknown reason can not see __AVX2__ 
 
-void JincResize::KernelRow_avx2(int64_t iOutWidth)
-{
-    const int k_col8 = iKernelSize - (iKernelSize % 8);
-
-#pragma omp parallel for num_threads(threads_) 
-    for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
-    {
-        // start all row-only dependent ptrs here
-        //int64_t iProcPtr = static_cast<int64_t>((row * iMul - (iKernelSize / 2)) * iOutWidth) + (col * iMul - (iKernelSize / 2));
-        int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
-        int64_t iInpPtrRowStart = row * iWidthEl;
-
-        for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
-        {
-            unsigned char ucInpSample = g_pElImageBuffer[(iInpPtrRowStart + col)];
-
-            float* pfCurrKernel = g_pfKernelWeighted + static_cast<int64_t>(ucInpSample) * iKernelSize * iKernelSize;
-
-            float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
-
-            for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
-            {
-
-                // add full kernel row to output - AVX2
-                for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
-                {
-                    _mm256_storeu_ps(pfProc + k_col, _mm256_add_ps(*(__m256*)(pfCurrKernel + k_col), *(__m256*)(pfProc + k_col)));
-                }
-                
-                // need to process last up to 7 floats separately..
-                for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
-                    pfProc[k_col] += pfCurrKernel[k_col];
-
-                pfProc += iOutWidth; // point to next start point in output buffer now
-                pfCurrKernel += iKernelSize; // point to next kernel row now
-            } // k_row
-        } // col
-    }
-}
-
 
 void JincResize::KernelRow_avx2_mul(int64_t iOutWidth)
 {
     const int k_col8 = iKernelSize - (iKernelSize % 8);
-
-
     float *pfCurrKernel = g_pfKernel; 
+
+    ZeroMem_avx2(g_pfFilteredImageBuffer, iWidthEl * iHeightEl * iMul * iMul);
 
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here
         int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
-        int64_t iInpPtrRowStart = row * iWidthEl;
+ 
+        // prepare float32 pre-converted row data for each threal separately
+        int64_t tidx = omp_get_thread_num();
+        float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+        (this->*GetInpElRowAsFloat)(row, pfInpRowSamplesFloatBufStart);
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
         {
-
-            __declspec(align(32)) float fSample = (float)g_pElImageBuffer[(iInpPtrRowStart + col)];
-
-            const __m256 inp256 = _mm256_broadcast_ss(&fSample);
-
             float *pfCurrKernel_pos = pfCurrKernel;
-
             float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
-
 
             for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
             {
-
                 for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
                 {
-                    _mm256_storeu_ps(pfProc + k_col, _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), inp256, *(__m256*)(pfProc + k_col)));
+                    *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart[col]), *(__m256*)(pfProc + k_col));
                 }
                 
                 // need to process last (up to 7) floats separately..
                 for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
                 {
-                    pfProc[k_col] += (pfCurrKernel_pos[k_col] * (float)g_pElImageBuffer[(iInpPtrRowStart + col)]);
+                    pfProc[k_col] += (pfCurrKernel_pos[k_col] * pfInpRowSamplesFloatBufStart[col]);
                 }
 
                 pfProc += iOutWidth; // point to next start point in output buffer now
@@ -98,8 +52,8 @@ void JincResize::KernelRow_avx2_mul(int64_t iOutWidth)
 /*Better implementation of Mul2 will be with AVX512 instructions with shift between zmm registers instead of memory referencing with FMA*/
 void JincResize::KernelRow_avx2_mul2_taps8(int64_t iOutWidth)
 {
-    float* pfCurrKernel = g_pfKernelWeighted + iKernelSize*iKernelSize; // needs unfinished g_pfKernelParProc with shifted or padded with zeroes kernel rows
-
+    float* pfCurrKernel = g_pfKernel + iKernelSize*iKernelSize; // needs unfinished g_pfKernelParProc with shifted or padded with zeroes kernel rows
+/*
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
@@ -166,14 +120,14 @@ void JincResize::KernelRow_avx2_mul2_taps8(int64_t iOutWidth)
                 pfCurrKernel_pos += iKernelSize;// *iParProc; // point to next kernel row now
             } // k_row
         } // col
-    }
+    }*/
 }
 
 
 void JincResize::KernelRow_avx2_mul8_taps3(int64_t iOutWidth)
 {
     float* pfCurrKernel = g_pfKernel;
-
+    /*
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
@@ -261,31 +215,29 @@ void JincResize::KernelRow_avx2_mul8_taps3(int64_t iOutWidth)
                 pfCurrKernel_pos += iKernelSize; // point to next kernel row now
             } // k_row
         } // col
-    }
+    }*/
 }
 
 void JincResize::KernelRow_avx2_mul4_taps4(int64_t iOutWidth)
 {
     float* pfCurrKernel = g_pfKernel;
 
+    ZeroMem_avx2(g_pfFilteredImageBuffer, iWidthEl * iHeightEl * iMul * iMul); // TO DO - think how to use zeroed ymms at main processing
+    
 #pragma omp parallel for num_threads(threads_) 
     for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
     {
         // start all row-only dependent ptrs here 
         int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
-        int64_t iInpPtrRowStart = row * iWidthEl;
+
+        // prepare float32 pre-converted row data for each threal separately
+        int64_t tidx = omp_get_thread_num();
+        float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+        (this->*GetInpElRowAsFloat)(row, pfInpRowSamplesFloatBufStart);
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
         {
-            __declspec(align(32)) float fSample = (float)g_pElImageBuffer[(iInpPtrRowStart + col)];
-            __declspec(align(32)) float fSample2 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 1)];
-            __declspec(align(32)) float fSample3 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 2)];
-            __declspec(align(32)) float fSample4 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 3)];
-
-            __declspec(align(32)) float fSample5 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 4)];
-            __declspec(align(32)) float fSample6 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 5)];
-            __declspec(align(32)) float fSample7 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 6)];
-            __declspec(align(32)) float fSample8 = (float)g_pElImageBuffer[(iInpPtrRowStart + col + 7)];
+            float* pfColStart = pfInpRowSamplesFloatBufStart + col;
 
             float* pfCurrKernel_pos = pfCurrKernel;
 
@@ -310,12 +262,12 @@ void JincResize::KernelRow_avx2_mul4_taps4(int64_t iOutWidth)
                 my_ymm5 = _mm256_load_ps(pfProc + 40);
                 my_ymm6 = _mm256_load_ps(pfProc + 48);
 
-                my_ymm8 = _mm256_broadcast_ss(&fSample); // 1
-                my_ymm9 = _mm256_broadcast_ss(&fSample3); // 3
-                my_ymm10 = _mm256_broadcast_ss(&fSample5); // 5
-                my_ymm11 = _mm256_broadcast_ss(&fSample7); // 7            
+                my_ymm8 = _mm256_broadcast_ss(pfColStart + 0); // 1
+                my_ymm9 = _mm256_broadcast_ss(pfColStart + 2); // 3
+                my_ymm10 = _mm256_broadcast_ss(pfColStart + 4); // 5
+                my_ymm11 = _mm256_broadcast_ss(pfColStart + 6); // 7 
 
-                 // 1st sample
+                    // 1st sample
                 my_ymm0 = _mm256_fmadd_ps(my_ymm12, my_ymm8, my_ymm0);
                 my_ymm1 = _mm256_fmadd_ps(my_ymm13, my_ymm8, my_ymm1);
                 my_ymm2 = _mm256_fmadd_ps(my_ymm14, my_ymm8, my_ymm2);
@@ -352,12 +304,12 @@ void JincResize::KernelRow_avx2_mul4_taps4(int64_t iOutWidth)
                 my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 56), 1);
 
                 // even samples
-                my_ymm8 = _mm256_broadcast_ss(&fSample2); // 2
-                my_ymm9 = _mm256_broadcast_ss(&fSample4); // 4
-                my_ymm10 = _mm256_broadcast_ss(&fSample6); // 6
-                my_ymm11 = _mm256_broadcast_ss(&fSample8); // 8            
+                my_ymm8 = _mm256_broadcast_ss(pfColStart + 1); // 2
+                my_ymm9 = _mm256_broadcast_ss(pfColStart + 3); // 4
+                my_ymm10 = _mm256_broadcast_ss(pfColStart + 5); // 6
+                my_ymm11 = _mm256_broadcast_ss(pfColStart + 7); // 8 
 
-                 // 2nd sample
+                    // 2nd sample
                 my_ymm0 = _mm256_fmadd_ps(my_ymm12, my_ymm8, my_ymm0);
                 my_ymm1 = _mm256_fmadd_ps(my_ymm13, my_ymm8, my_ymm1);
                 my_ymm2 = _mm256_fmadd_ps(my_ymm14, my_ymm8, my_ymm2);
@@ -388,10 +340,11 @@ void JincResize::KernelRow_avx2_mul4_taps4(int64_t iOutWidth)
                 _mm256_store_ps(pfProc + 36, my_ymm4);
                 _mm256_store_ps(pfProc + 44, my_ymm5);
                 _mm256_store_ps(pfProc + 52, my_ymm6);
- 
+
                 pfProc += iOutWidth; // point to next start point in output buffer now
                 pfCurrKernel_pos += iKernelSize;// *iParProc; // point to next kernel row now
             } // k_row
+ 
         } // col
     }
 }
@@ -399,6 +352,8 @@ void JincResize::KernelRow_avx2_mul4_taps4(int64_t iOutWidth)
 void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
 {
     float* pfCurrKernel = g_pfKernel;
+
+    ZeroMem_avx2(g_pfFilteredImageBuffer, iWidthEl * iHeightEl * iMul * iMul);
 
     /* iMul=4, iTaps=4, KernelSize (row length in floats) is 32*/
     /* full row-walking, fixed at 19.01.2021 and need to be tested 
@@ -411,9 +366,9 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
         int64_t iProcPtrRowStart = (row * iMul - (iKernelSize / 2)) * iOutWidth - (iKernelSize / 2);
 
 	// prepare float32 pre-converted row data for each threal separately
-	int64_t tidx = omp_get_thread_num();
-        float *pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * sizeof(float) * iWidthEl;
-        (this->*ConvertInpElRowToFloat)(iWidthEl, g_pElImageBuffer + row * iWidthEl, pfInpRowSamplesFloatBufStart); 
+	    int64_t tidx = omp_get_thread_num();
+        float *pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+        (this->*GetInpElRowAsFloat)(row, pfInpRowSamplesFloatBufStart);
 	// lets hope now converted to float32 one row inp samples in L1d cache.
 
         for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
@@ -423,15 +378,9 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
 
             float *pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + iTaps * iMul + k_row * iOutWidth;
 
-
             __m256 my_ymm0, my_ymm1, my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
             __m256 my_ymm8, my_ymm9, my_ymm10, my_ymm11; // inp samples
             __m256 my_ymm12, my_ymm13, my_ymm14, my_ymm15; // kernel samples
-
-            my_ymm8 = _mm256_setzero_ps();
-            my_ymm9 = _mm256_setzero_ps();
-            my_ymm10 = _mm256_setzero_ps();
-            my_ymm11 = _mm256_setzero_ps();
 
             my_ymm12 = _mm256_load_ps(pfCurrKernel_pos);
             my_ymm13 = _mm256_load_ps(pfCurrKernel_pos + 8);
@@ -449,7 +398,7 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
             for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
             {
                 // odd samples
-		my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col); // 1
+		        my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col); // 1
                 my_ymm9 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 2); // 3
                 my_ymm10 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 4); // 5
                 my_ymm11 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 6); // 7            
@@ -491,7 +440,7 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 my_ymm6 = _mm256_insertf128_ps(my_ymm6, *(__m128*)(pfProc + 56), 1);
 
                 // even samples
-		my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 1); // 2
+		        my_ymm8 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 1); // 2
                 my_ymm9 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 3); // 4
                 my_ymm10 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 5); // 6
                 my_ymm11 = _mm256_broadcast_ss(pfInpRowSamplesFloatBufStart + col + 7); // 8            
@@ -515,7 +464,7 @@ void JincResize::KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth)
                 my_ymm4 = _mm256_fmadd_ps(my_ymm14, my_ymm10, my_ymm4);
                 my_ymm5 = _mm256_fmadd_ps(my_ymm15, my_ymm10, my_ymm5);
 
-                // 7th sample
+                // 8th sample
                 my_ymm3 = _mm256_fmadd_ps(my_ymm12, my_ymm11, my_ymm3);
                 my_ymm4 = _mm256_fmadd_ps(my_ymm13, my_ymm11, my_ymm4);
                 my_ymm5 = _mm256_fmadd_ps(my_ymm14, my_ymm11, my_ymm5);
@@ -612,4 +561,71 @@ void JincResize::ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char*
     }
 
 
+}
+
+void JincResize::GetInpElRowAsFloat_avx2(int64_t iInpRow, float* dst)
+{
+    int64_t col;
+
+    const int64_t col8 = iKernelSize - iKernelSize % 8;
+    // row range from iTaps to iHeightEl - iTaps - 1
+    // use iWidthEl and iHeightEl set in KernelRow()
+
+    if (iInpRow < iKernelSize) iInpRow = iKernelSize;
+    if (iInpRow > (iCurrInpHeight + iKernelSize - 1)) iInpRow = iCurrInpHeight + iKernelSize - 1;
+
+    unsigned char* pCurrRowSrc = pCurr_src + (iInpRow - iKernelSize) * iCurrSrcStrid;
+    // prefetchnta(inprow)
+    for (int64_t i = 0; i < iCurrInpWidth; i += 32)
+    {
+        _mm_prefetch((const char*)(pCurrRowSrc + i), _MM_HINT_NTA);
+    }
+        
+    // start cols
+    __m256 my_ymm_start = _mm256_setzero_ps();
+    my_ymm_start = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm_start), *pCurrRowSrc));
+
+    for (col = iKernelSize - 8; col >= 0; col-=8) // left
+    {
+        _mm256_store_ps(dst + col, my_ymm_start);
+    }
+
+    // mid cols
+    unsigned char *pCurrColSrc = pCurrRowSrc;
+    for (col = iKernelSize; col < iKernelSize + iCurrInpWidth; col+=8) 
+    {
+        __m256 src_ps = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadu_si128((__m128i*)pCurrColSrc)));
+        _mm256_store_ps(dst + col, src_ps);
+        pCurrColSrc += 8;
+    }
+
+    // end cols
+    __m256 my_ymm_end = _mm256_setzero_ps();
+    my_ymm_end = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm_start), pCurrRowSrc[iCurrInpWidth - 1]));
+    for (col = iKernelSize + iCurrInpWidth; col < iWidthEl; col+=8) // right
+    {
+        _mm256_store_ps(dst + col, my_ymm_end);
+    }
+ 
+}
+
+void JincResize::ZeroMem_avx2(float* pF, int64_t iSize)
+{
+    const int64_t iSizeofZeroedFloats16 = iSize - (iSize % 16);
+
+    __m256 my_zero0 = _mm256_setzero_ps();
+    __m256 my_zero1 = _mm256_setzero_ps();
+
+    float* pZeroed = pF;
+//#pragma omp parallel for num_threads(threads_)
+    for (int64_t i16 = 0; i16 < iSizeofZeroedFloats16; i16 += 16)
+    {
+        _mm256_stream_ps(pZeroed, my_zero0);
+        _mm256_stream_ps(pZeroed + 8, my_zero1);
+        pZeroed += 16;
+    }
+    for (int64_t i = iSizeofZeroedFloats16; i < iSize; ++i)
+    {
+        g_pfFilteredImageBuffer[i] = 0.0f;
+    }
 }
