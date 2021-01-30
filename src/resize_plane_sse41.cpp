@@ -23,7 +23,7 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
             const int src_width = src->GetRowSize(plane) / pixel_size;
             const int src_height = src->GetHeight(plane);
             unsigned char* dstp_add = reinterpret_cast<unsigned char*>(dst->GetWritePtr(plane));
-            KernelProc((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
+			(this->*KernelProcAll)((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
             continue;
         }
 
@@ -39,7 +39,8 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m128 result = _mm_setzero_ps();
 
-                if constexpr (std::is_same_v<T, uint8_t>)
+//                if constexpr (std::is_same_v<T, uint8_t>)
+				if (std::is_same_v<T, uint8_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
@@ -58,7 +59,8 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
                     const __m128i src_int = _mm_packus_epi16(_mm_packs_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()), _mm_setzero_si128());
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
                 }
-                else if constexpr (std::is_same_v<T, uint16_t>)
+//                else if constexpr (std::is_same_v<T, uint16_t>)
+				else if (std::is_same_v<T, uint16_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
@@ -84,7 +86,8 @@ void JincResize::resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, P
                     {
                         for (int lx = 0; lx < coeff[i]->filter_size; lx += 4)
                         {
-                            const __m128 src_ps = _mm_max_ps(_mm_loadu_ps(src_ptr + lx), min_val);
+//                            const __m128 src_ps = _mm_max_ps(_mm_loadu_ps(src_ptr + lx), min_val);
+							const __m128 src_ps = _mm_max_ps(*(__m128*)(src_ptr + lx), min_val);
                             const __m128 coeff = _mm_load_ps(coeff_ptr + lx);
                             result = _mm_add_ps(result, _mm_mul_ps(src_ps, coeff));
                         }

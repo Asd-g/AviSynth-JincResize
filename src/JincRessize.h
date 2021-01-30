@@ -2,9 +2,14 @@
 #define __JINCRESIZE_H__
 
 #include <immintrin.h>
+#include <string>
+#include <vector>
+#include <algorithm>
 
+#include "math.h"
 #include "avisynth.h"
 #include "avs/minmax.h"
+#include "omp.h"
 
 struct EWAPixelCoeffMeta
 {
@@ -55,16 +60,17 @@ class JincResize : public GenericVideoFilter
     Weighting Weighting_type;
 
     bool bAddProc;
-    unsigned char *g_pElImageBuffer;
+//    unsigned char *g_pElImageBuffer;
     float *g_pfImageBuffer = 0, *g_pfFilteredImageBuffer = 0, *pfInpFloatRow = 0;
     int64_t SzFilteredImageBuffer;
+	float *pfFilteredCirculatingBuf = 0;
  //   float* pfEndOfFilteredImageBuffer;
 
     float *g_pfKernel = 0;
-    float* g_pfKernelWeighted = 0;
     float* g_pfKernelParProc = 0;
     int iParProc;
     KrnRowUsefulRange* pKrnRUR;
+	std::vector<float*> vpfRowsPointers;
 
     unsigned char ucFVal;
 
@@ -75,7 +81,14 @@ class JincResize : public GenericVideoFilter
     int64_t iTaps;
     int64_t iWidth, iHeight;
     int64_t iWidthEl, iHeightEl;
-    
+
+/*    unsigned char* pCurr_src; // looks like bad but working way of transfer params of current call to GetInpElRowAsFloat.
+    int iCurrSrcStrid; 
+    int iCurrInpWidth, iCurrInpHeight;
+
+	unsigned char *ucpDst; // same lazy way to transfer args - TO DO make args of KernelRow in future
+	int iCurrDstStride;
+    */
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
     template <typename T>
@@ -90,10 +103,12 @@ class JincResize : public GenericVideoFilter
     void fill2DKernel(void);
     void KernelProc(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 
-    void KernelRow_c(int64_t iOutWidth);
-    void KernelRow_c_mul(int64_t iOutWidth); // TO DO : add full row-walking c-version too
-    void KernelRow_sse41(int64_t iOutWidth);
-    void KernelRow_avx2(int64_t iOutWidth);
+	void KernelRowAll_c_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+	void KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+												//    void KernelRow_sse41_mul(int64_t iOutWidth);
+	void KernelRowAll_sse2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+	void KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+//	void KernelRow_sse2_mul_cb(int64_t iOutWidth);
     void KernelRow_avx2_mul(int64_t iOutWidth);
     void KernelRow_avx2_mul2_taps8(int64_t iOutWidth);
     void KernelRow_avx2_mul8_taps3(int64_t iOutWidth);
@@ -101,13 +116,22 @@ class JincResize : public GenericVideoFilter
     void KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth);
     void ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
     void ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
-    void ConvertInpElRowToFloat_c(int64_t iWidth, unsigned char *src, float *dst);
-    void ConvertInpElRowToFloat_avx2(int64_t iWidth, unsigned char *src, float *dst);
+	void ConvertToInt_sse2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+	void ConvertToInt_null(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+	void ConvertiMulRowsToInt_c(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
+	void ConvertiMulRowsToInt_sse2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
+    void GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
+    void GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
+	void GetInpElRowAsFloat_sse2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 
-    void KernelRow_avx512(int64_t iOutWidth);
+    void KernelRow_avx512_mul(int64_t iOutWidth);
     void(JincResize::* KernelRow)(int64_t iOutWidth);
+
+	void(JincResize::* KernelProcAll)(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+
     void(JincResize::* ConvertToInt)(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
     void(JincResize::* ConvertInpElRowToFloat)(int64_t iWidth, unsigned char *src, float *dst);
+    void(JincResize::* GetInpElRowAsFloat)(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst); // the most wanted
 
 
 public:

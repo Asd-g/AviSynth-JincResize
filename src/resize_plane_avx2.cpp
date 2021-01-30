@@ -43,7 +43,8 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m256 result = _mm256_setzero_ps();
 
-                if constexpr (std::is_same_v<T, uint8_t>)
+//                if constexpr (std::is_same_v<T, uint8_t>)
+				if (std::is_same_v<T, uint8_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
@@ -64,7 +65,8 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
 
                 }
-                else if constexpr (std::is_same_v<T, uint16_t>)
+//                else if constexpr (std::is_same_v<T, uint16_t>)
+				else if (std::is_same_v<T, uint16_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
@@ -91,7 +93,8 @@ void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PV
                     {
                         for (int lx = 0; lx < coeff[i]->filter_size; lx += 8)
                         {
-                            const __m256 src_ps = _mm256_max_ps(_mm256_loadu_ps(src_ptr + lx), min_val);
+//                          const __m256 src_ps = _mm256_max_ps(_mm256_loadu_ps(src_ptr + lx), min_val);
+							const __m256 src_ps = _mm256_max_ps(*(__m256*)(src_ptr + lx), min_val);
                             const __m256 coeff = _mm256_load_ps(coeff_ptr + lx);
                             result = _mm256_fmadd_ps(src_ps, coeff, result);
                         }
