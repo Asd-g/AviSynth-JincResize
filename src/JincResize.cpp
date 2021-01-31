@@ -666,9 +666,6 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         g_pfKernelParProc = (float*)_mm_malloc(iKernelStridePP * iKernelSize * iParProc * sizeof(float), 32);
         memset(g_pfKernelParProc, 0, iKernelStridePP * iKernelSize * iParProc * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
 
-        pKrnRUR = new KrnRowUsefulRange[iKernelSize * sizeof(KrnRowUsefulRange)];
-        memset(pKrnRUR, 0, iKernelSize * sizeof(KrnRowUsefulRange));
-
         fill2DKernel();
 
         iWidth = src_width;
@@ -719,17 +716,13 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 	const bool sse2 = (!!(env->GetCPUFlags() & CPUF_SSE2) && opt < 0) || opt == 4;
 
-    if (ap == 1)
-		ConvertToInt = &JincResize::ConvertToInt_c; // default
-	else 
-		ConvertToInt = &JincResize::ConvertToInt_null; // default
-
+	ConvertToInt = &JincResize::ConvertToInt_c; // default
     GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_c; // default
 
     if (avx512)
     {
         if (bAddProc)
-            KernelRow = &JincResize::KernelRow_avx512_mul;
+//            KernelRow = &JincResize::KernelRow_avx512_mul;
 
         switch (vi.ComponentSize())
         {
@@ -742,10 +735,13 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     {
         if (bAddProc)
         {
-          if (iMul == 4 && iTaps == 4)  KernelRow = &JincResize::KernelRow_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
+			if (ap == 1)
+//          if (iMul == 4 && iTaps == 4)  KernelRow = &JincResize::KernelRow_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
 //          else if (iMul == 8 && iTaps == 3)  KernelRow = &JincResize::KernelRow_avx2_mul8_taps3; // looks still slower in compare with old, may be avx512 will be faster
 //          else if (iMul == 2 && iTaps == 8)  KernelRow = &JincResize::KernelRow_avx2_mul2_taps8; - still unfinished
-          else  KernelRow = &JincResize::KernelRow_avx2_mul;
+       /*   else*/  KernelProcAll = &JincResize::KernelRowAll_avx2_mul;
+			else
+				KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb;
 
           ConvertToInt = &JincResize::ConvertToInt_avx2;
           GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_avx2; 
@@ -762,10 +758,14 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     else if (sse41)
     {
 		if (bAddProc)
-		{
-			KernelProcAll = &JincResize::KernelRowAll_sse2_mul;
-			GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_sse2;
-		}
+			if (ap == 1)
+			{
+				KernelProcAll = &JincResize::KernelRowAll_sse2_mul;
+			}
+			else // ap == 2
+				KernelProcAll = &JincResize::KernelRowAll_sse2_mul_cb;
+
+		GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_sse2;
 
         switch (vi.ComponentSize())
         {
@@ -865,7 +865,7 @@ void JincResize::fill2DKernel(void)
 
             float fArg = (fPi * fDist / iMul);
 
-            float fArg_w = fDist * 3.9f / (iKernelSize / 2);
+            float fArg_w = fDist * 3.7f / (iKernelSize / 2); 
 
             if (fArg != 0)
             {
@@ -890,7 +890,7 @@ void JincResize::fill2DKernel(void)
                         fW = ((2 - (4 * fDist / iKernelSize))); // trapezoidal weighting
                     }
                 }
-                g_pfKernel[i * iKernelSize + j] = fBess * fW;
+				g_pfKernel[i * iKernelSize + j] = fBess * fW;
             }
             else
                 g_pfKernel[i * iKernelSize + j] = 1.0f;
@@ -920,53 +920,6 @@ void JincResize::fill2DKernel(void)
     }
 
     // TO DO : 1. Make kernel half height. 2. Add run-length encoding for non-zero line length.
-
-    // fill kernel row useful range table
-    for (i = 0; i < iKernelSize; i++)
-    {
-        bool bStarted = false;
-        for (j = 0; j < iKernelSize; j++)
-        {
-            float fDist2 = sqrtf((float(iKernelSize / 2) - j) * (float(iKernelSize / 2) - j) + (float(iKernelSize / 2) - i) * (float(iKernelSize / 2) - i));
-            if ((fDist2 <= iKernelSize / 2) && !bStarted)
-            {
-                pKrnRUR[i].start_col = j;
-                bStarted = true;
-            }
-            if ((fDist2 > iKernelSize / 2) && bStarted)
-            {
-                pKrnRUR[i].end_col = j - 1;
-                bStarted = false;
-            }
-        }
-        if (bStarted) pKrnRUR[i].end_col = iKernelSize;
-    }
-
-}
-
-void JincResize::KernelProc(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
-{
-    int64_t row, col;
-
-    // current input plane sizes
-    iWidthEl = iInpWidth + 2 * iKernelSize;
-    iHeightEl = iInpHeight + 2 * iKernelSize;
-	/*
-    pCurr_src = src;
-    iCurrSrcStrid = iSrcStride;
-    iCurrInpWidth = iInpWidth;
-    iCurrInpHeight = iInpHeight;
-
-	iCurrDstStride = iDstStride; // TO DO - redo later
-	ucpDst = dst;
-	*/
-    // 2d convolution pass
-    int64_t iOutWidth = iWidthEl * iMul;
-    
-    (this->*KernelRow)(iOutWidth); 
-
-    (this->*ConvertToInt)(iInpWidth, iInpHeight, dst, iDstStride);
-    
 }
 
 void JincResize::ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
@@ -995,20 +948,16 @@ void JincResize::ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* ds
     }
 }
 
-void JincResize::ConvertToInt_null(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
-{
-	return; // to remove later
-}
-
 void JincResize::ConvertiMulRowsToInt_c(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
 {
 	int row_float_buf_index = 0;
+	int iShift = (iKernelSize + iTaps) * iMul;
 	for (int row = iOutStartRow; row < iOutStartRow + iMul; row++)
 	{
 		for (int col = 0; col < iInpWidth * iMul; col++)
 		{
 			unsigned char ucVal;
-			float fVal = vpfRowsPointers[row_float_buf_index][col + iKernelSize * iMul];
+			float fVal = vpfRowsPointers[row_float_buf_index][col + iShift];
 
 			fVal += 0.5f;
 
@@ -1082,9 +1031,8 @@ void JincResize::KernelRowAll_c_mul(unsigned char *src, int iSrcStride, int iInp
 
 			float* pfProc = g_pfFilteredImageBuffer + iProcPtrRowStart + col * iMul;
 
-			for (int64_t k_row = 0; k_row < iKernelSize - iMul; k_row++)
+			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 			{
-				//                for (int64_t k_col = pKrnRUR[k_row].start_col; k_col < pKrnRUR[k_row].end_col; k_col++)
 				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
 				{
 					pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample;
@@ -1092,20 +1040,9 @@ void JincResize::KernelRowAll_c_mul(unsigned char *src, int iSrcStride, int iInp
 				pfProc += iWidthEl * iMul; // point to next start point in output buffer now
 				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
 			} // k_row
-
-			for (int64_t k_row = iKernelSize - iMul; k_row < iKernelSize; k_row++)
-			{
-				//				for (int64_t k_col = pKrnRUR[k_row].start_col; k_col < pKrnRUR[k_row].end_col; k_col++)
-				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
-				{
-					pfProc[k_col] = pfCurrKernel_pos[k_col] * fInpSample;
-				} // k_col 
-				pfProc += iWidthEl * iMul; // point to next start point in output buffer now
-				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
-			} // k_row
-
 		} // col
-	}
+		
+	} // row
 
 	ConvertToInt_c(iInpWidth, iInpHeight, dst, iDstStride);
 }
@@ -1136,24 +1073,12 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 			float* pfCurrKernel_pos = pfCurrKernel;
 			float* pfProc;
 
-			// temp load
-			for (int64_t k_row = 0; k_row < iKernelSize - iMul; k_row++)
+			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 			{
 				pfProc = vpfRowsPointers[k_row] + col * iMul;
 				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
 				{
 					pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample;
-				} // k_col 
-				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
-			} // k_row
-
-			// zero-load
-			for (int64_t k_row = iKernelSize - iMul; k_row < iKernelSize; k_row++)
-			{
-				pfProc = vpfRowsPointers[k_row] + col * iMul;
-				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
-				{
-					pfProc[k_col] = pfCurrKernel_pos[k_col] * fInpSample;
 				} // k_col 
 				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
 			} // k_row
@@ -1169,6 +1094,13 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 
 		// circulate pointers to iMul rows upper
 		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
+		}
+
 	}
 }
 
@@ -1187,7 +1119,6 @@ JincResize::~JincResize()
     {
         _mm_free(g_pfKernel);
         _mm_free(g_pfKernelParProc);
-        delete pKrnRUR;
         _mm_free(g_pfFilteredImageBuffer);
 		_mm_free(pfFilteredCirculatingBuf);
     	_mm_free(pfInpFloatRow);

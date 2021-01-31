@@ -80,7 +80,7 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 	{
 		// start all row-only dependent ptrs here
 
-		// prepare float32 pre-converted row data for each threal separately
+		// prepare float32 pre-converted row data 
 //		int64_t tidx = 1;// omp_get_thread_num();
 		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow;// +tidx * iWidthEl;
 		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
@@ -91,7 +91,7 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 		{
 			float* pfCurrKernel_pos = g_pfKernel;
 
-			for (int64_t k_row = 0; k_row < iKernelSize - iMul; k_row++)
+			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 			{
 				pfProc = vpfRowsPointers[k_row] + col * iMul;
 				for (int64_t k_col = 0; k_col < k_col4; k_col += 4)
@@ -106,20 +106,6 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
 			} // k_row
 
-			for (int64_t k_row = iKernelSize - iMul; k_row < iKernelSize; k_row++)
-			{
-				pfProc = vpfRowsPointers[k_row] + col * iMul;
-				for (int64_t k_col = 0; k_col < k_col4; k_col += 4)
-				{
-					*(__m128*)(pfProc + k_col) = _mm_add_ps(_mm_mul_ps(*(__m128*)(pfCurrKernel_pos + k_col), _mm_load_ps1(pfInpRowSamplesFloatBufStart + col)), _mm_setzero_ps());
-				}
-
-				// need to process last up to 3 floats separately..
-				for (int64_t k_col = k_col4; k_col < iKernelSize; ++k_col)
-					pfProc[k_col] += pfCurrKernel_pos[k_col];
-
-				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
-			} // k_row
 		} // col
 
 		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
@@ -131,6 +117,12 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 
 		// circulate pointers to iMul rows upper
 		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
+		}
 	}
 }
 
@@ -144,7 +136,7 @@ void JincResize::ConvertiMulRowsToInt_sse2(int iInpWidth, int iOutStartRow, unsi
 	{
 		__m128 my_zero_xmm2 = _mm_setzero_ps();
 
-		float* pfProc =  vpfRowsPointers[row_float_buf_index] + iKernelSize * iMul;
+		float* pfProc =  vpfRowsPointers[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
 		unsigned char* pucDst = dst + row * iDstStride;
 
 		for (int col = 0; col < col16; col += 16)

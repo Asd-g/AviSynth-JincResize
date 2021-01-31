@@ -43,11 +43,6 @@ public:
     double* lut;
 };
 
-struct KrnRowUsefulRange
-{
-    int start_col, end_col;
-};
-
 class JincResize : public GenericVideoFilter
 {
     Lut* init_lut;
@@ -69,7 +64,6 @@ class JincResize : public GenericVideoFilter
     float *g_pfKernel = 0;
     float* g_pfKernelParProc = 0;
     int iParProc;
-    KrnRowUsefulRange* pKrnRUR;
 	std::vector<float*> vpfRowsPointers;
 
     unsigned char ucFVal;
@@ -101,36 +95,37 @@ class JincResize : public GenericVideoFilter
     void(JincResize::*process_frame)(EWAPixelCoeff**, PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
     void fill2DKernel(void);
-    void KernelProc(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 
 	void KernelRowAll_c_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
-												//    void KernelRow_sse41_mul(int64_t iOutWidth);
+
 	void KernelRowAll_sse2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
-//	void KernelRow_sse2_mul_cb(int64_t iOutWidth);
-    void KernelRow_avx2_mul(int64_t iOutWidth);
+
+	void KernelRowAll_avx2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+	void KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+
     void KernelRow_avx2_mul2_taps8(int64_t iOutWidth);
     void KernelRow_avx2_mul8_taps3(int64_t iOutWidth);
     void KernelRow_avx2_mul4_taps4(int64_t iOutWidth);
     void KernelRow_avx2_mul4_taps4_fr(int64_t iOutWidth);
-    void ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
-    void ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+
+	void ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 	void ConvertToInt_sse2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
-	void ConvertToInt_null(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+	void ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+
 	void ConvertiMulRowsToInt_c(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
 	void ConvertiMulRowsToInt_sse2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
-    void GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
+	void ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
+
+	void GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
     void GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 	void GetInpElRowAsFloat_sse2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 
     void KernelRow_avx512_mul(int64_t iOutWidth);
-    void(JincResize::* KernelRow)(int64_t iOutWidth);
 
 	void(JincResize::* KernelProcAll)(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
-
     void(JincResize::* ConvertToInt)(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
-    void(JincResize::* ConvertInpElRowToFloat)(int64_t iWidth, unsigned char *src, float *dst);
     void(JincResize::* GetInpElRowAsFloat)(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst); // the most wanted
 
 
