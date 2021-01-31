@@ -667,12 +667,9 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         memset(g_pfKernelParProc, 0, iKernelStridePP * iKernelSize * iParProc * sizeof(float)); // pad kernel rows with zeroes for load to SIMD with shifts
 
         fill2DKernel();
-
-        iWidth = src_width;
-        iHeight = src_height;
-
-        iWidthEl = iWidth + 2 * iKernelSize; 
-        iHeightEl = iHeight + 2 * iKernelSize;
+        
+        iWidthEl = src_width + 2 * iKernelSize;
+        iHeightEl = src_height + 2 * iKernelSize;
 
          SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
         g_pfFilteredImageBuffer = (float*)_mm_malloc(SzFilteredImageBuffer, 32);
@@ -782,7 +779,12 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 				KernelProcAll = &JincResize::KernelRowAll_sse2_mul;
 			}
 			else // ap == 2
-				KernelProcAll = &JincResize::KernelRowAll_sse2_mul_cb;
+			{
+/*				if (iMul == 2 && iTaps == 4)  // still slower at core2 6400, need to think about fast asm more.
+					KernelProcAll = &JincResize::KernelRowAll_sse2_mul2_taps4_cb;
+				else*/
+					KernelProcAll = &JincResize::KernelRowAll_sse2_mul_cb;
+			}
 
 		GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_sse2;
 
@@ -798,7 +800,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 		if (bAddProc)
 			if (ap == 1)
 			{
-				KernelProcAll = &JincResize::KernelRowAll_c_mul;// KernelRow_c_mul_cb;
+				KernelProcAll = &JincResize::KernelRowAll_c_mul;
 			}
 			else // ap == 2
 				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb;
@@ -981,7 +983,6 @@ void JincResize::GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurr
 {
     int64_t col;
     // row range from iTaps to iHeightEl - iTaps - 1
-    // use iWidthEl and iHeightEl set in KernelRow()
 
     if (iInpRow < iKernelSize) iInpRow = iKernelSize;
     if (iInpRow > (iCurrInpHeight + iKernelSize - 1)) iInpRow = iCurrInpHeight + iKernelSize - 1;
@@ -1087,9 +1088,9 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 
 		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
-		if (iOutStartRow >= 0 && iOutStartRow < (iHeight)*iMul)
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_c(iWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper

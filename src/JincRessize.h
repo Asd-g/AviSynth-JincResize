@@ -73,16 +73,8 @@ class JincResize : public GenericVideoFilter
     int64_t iKernelStridePP; // kernel stride for parallel samples in row processing, aligned to size of SIMD register
     int64_t iMul;
     int64_t iTaps;
-    int64_t iWidth, iHeight;
     int64_t iWidthEl, iHeightEl;
 
-/*    unsigned char* pCurr_src; // looks like bad but working way of transfer params of current call to GetInpElRowAsFloat.
-    int iCurrSrcStrid; 
-    int iCurrInpWidth, iCurrInpHeight;
-
-	unsigned char *ucpDst; // same lazy way to transfer args - TO DO make args of KernelRow in future
-	int iCurrDstStride;
-    */
     template<typename T>
     void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
     template <typename T>
@@ -101,6 +93,7 @@ class JincResize : public GenericVideoFilter
 
 	void KernelRowAll_sse2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+	void KernelRowAll_sse2_mul2_taps4_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 
 	void KernelRowAll_avx2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);

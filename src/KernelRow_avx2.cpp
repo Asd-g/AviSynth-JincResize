@@ -102,9 +102,9 @@ void JincResize::KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, in
 
 		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
-		if (iOutStartRow >= 0 && iOutStartRow < (iHeight)*iMul)
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_avx2(iWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_avx2(iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper
