@@ -96,7 +96,7 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     0: Old 'large-kernel'. Can upsize and downsize with any ratio.\
     1: Alternative 1. Can use multithreading with 'threads' parameter. \
        Only upsize with integer ratio equal for width and height. \
-       Uses significally less memory.
-    2: Alternative 2. Uses only 1 thread now. For multithreading use Avisynth MT. \
+       Uses significally less memory. \
+    2: Alternative 2. Uses even less memory. Runs only 1 thread now. For multithreading use Avisynth MT. \
        Only upsize with integer ratio equal for width and height.
     Default: 0.
