@@ -91,7 +91,7 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     it also makes ringing and other distortions greater.
     Default: 0.
     
- - ap\
+ - ap (JincResize only)\
     Sets which procesing optimizations to use.\
     0: Old 'large-kernel'. Can upsize and downsize with any ratio.\
     1: Alternative 1. Can use multithreading with 'threads' parameter. \
