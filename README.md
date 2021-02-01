@@ -9,7 +9,7 @@ SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize](https://g
 # Usage
 
 ```
-JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", int "threads", int "opt")
+JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", int "threads", int "opt", int "wt", int "ap")
 ```
 
 ##### There are 4 additional functions:
@@ -79,4 +79,24 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     1: Use SSE4.1 code.\
     2: Use AVX2 code.\
     3: Use AVX-512 code.\
+    4: Use SSE2 code. Only works for iMul 4 or 8.\
     Default: -1.
+
+- wt (JincResize only)\
+    Sets which weighting function to use.\
+    0: Use Jinc weighting. I.e. Jinc weighted by Jinc = EWA Lanczos.\
+    1: Use trapezoidal weighting. It allows for greater amplitude Jinc withing provided taps number \
+    and makes result a bit sharper and closer to 'unweighted' Jinc. It provides at least taps/2 full-strike \
+    Jinc function and linear decay to zero after taps/2. If input is not good conditioned for this kernel  \ 
+    it also makes ringing and other distortions greater.
+    Default: 0.
+    
+ - ap\
+    Sets which procesing optimizations to use.\
+    0: Old 'large-kernel'. Can upsize and downsize with any ratio.\
+    1: Alternative 1. Can use multithreading with 'threads' parameter. \
+       Only upsize with integer ratio equal for width and height. \
+       Uses significally less memory. \
+    2: Alternative 2. Uses even less memory. Runs only 1 thread now. For multithreading use Avisynth MT. \
+       Only upsize with integer ratio equal for width and height.
+    Default: 0.
