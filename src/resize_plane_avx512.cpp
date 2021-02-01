@@ -1,8 +1,11 @@
 #include "JincRessize.h"
 
-#if !defined(__AVX512F__ ) && !defined(__INTEL_COMPILER)
-#error "AVX512 option needed"
-#endif
+#if !defined(__AVX512F__ ) //&& !defined(__INTEL_COMPILER)
+template <typename T>
+void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
+{
+}
+#else
 
 template <typename T>
 void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
@@ -27,7 +30,7 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
             const int src_width = src->GetRowSize(plane) / pixel_size;
             const int src_height = src->GetHeight(plane);
             unsigned char* dstp_add = reinterpret_cast<unsigned char*>(dst->GetWritePtr(plane));
-            KernelProc((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
+            (this->*KernelProcAll)((unsigned char*)srcp, src_stride, src_width, src_height, (unsigned char*)dstp_add, dst_stride);
             continue;
         }
 
@@ -112,6 +115,9 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
     }
 }
 
+#endif
+
 template void JincResize::resize_plane_avx512<uint8_t>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
 template void JincResize::resize_plane_avx512<uint16_t>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
 template void JincResize::resize_plane_avx512<float>(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+
