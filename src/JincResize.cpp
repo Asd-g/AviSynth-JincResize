@@ -718,9 +718,18 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
     if (avx512)
     {
-        if (bAddProc)
-//            KernelRow = &JincResize::KernelRow_avx512_mul;
 
+        if (bAddProc)
+        {
+            if (ap == 1)
+                KernelProcAll = &JincResize::KernelRowAll_avx512_mul;
+            else // ap == 2
+                KernelProcAll = &JincResize::KernelRowAll_avx512_mul_cb;
+
+            ConvertToInt = &JincResize::ConvertToInt_avx2; // still no avx512
+            GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_avx2; // still no avx512
+        }
+ 
         switch (vi.ComponentSize())
         {
             case 1: process_frame = &JincResize::resize_plane_avx512<uint8_t>; break;
@@ -733,12 +742,12 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         if (bAddProc)
         {
 			if (ap == 1)
-//          if (iMul == 4 && iTaps == 4)  KernelRow = &JincResize::KernelRow_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
-//          else if (iMul == 8 && iTaps == 3)  KernelRow = &JincResize::KernelRow_avx2_mul8_taps3; // looks still slower in compare with old, may be avx512 will be faster
-//          else if (iMul == 2 && iTaps == 8)  KernelRow = &JincResize::KernelRow_avx2_mul2_taps8; - still unfinished
-       /*   else*/  KernelProcAll = &JincResize::KernelRowAll_avx2_mul;
-			else
-				KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb;
+              if (iMul == 4 && iTaps == 4)  KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
+              else  KernelProcAll = &JincResize::KernelRowAll_avx2_mul;
+			else // ap == 2
+                if (iMul == 4 && iTaps == 4)  KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4_cb;
+                else
+				    KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb;
 
           ConvertToInt = &JincResize::ConvertToInt_avx2;
           GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_avx2; 
@@ -1151,7 +1160,7 @@ void JincResize::KernelRowAll_c_mul_cb_frw(unsigned char *src, int iSrcStride, i
 		{
 			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
 		}
-
+        
 		// circulate pointers to iMul rows upper
 		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
 
@@ -1160,7 +1169,7 @@ void JincResize::KernelRowAll_c_mul_cb_frw(unsigned char *src, int iSrcStride, i
 		{
 			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
 		}
-
+        
 	}
 }
 

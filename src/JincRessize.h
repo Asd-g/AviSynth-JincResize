@@ -100,7 +100,12 @@ class JincResize : public GenericVideoFilter
 
 	void KernelRowAll_avx2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+    void KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+    void KernelRowAll_avx2_mul4_taps4(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 	void KernelRowAll_avx2_mul_cb_frw(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+
+    void KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
+    void KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 
     void KernelRow_avx2_mul2_taps8(int64_t iOutWidth);
     void KernelRow_avx2_mul8_taps3(int64_t iOutWidth);
@@ -119,7 +124,6 @@ class JincResize : public GenericVideoFilter
     void GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 	void GetInpElRowAsFloat_sse2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 
-    void KernelRow_avx512_mul(int64_t iOutWidth);
 
 	void(JincResize::* KernelProcAll)(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
     void(JincResize::* ConvertToInt)(int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
