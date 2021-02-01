@@ -783,7 +783,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 /*				if (iMul == 2 && iTaps == 4)  // still slower at core2 6400, need to think about fast asm more.
 					KernelProcAll = &JincResize::KernelRowAll_sse2_mul2_taps4_cb;
 				else*/
-					KernelProcAll = &JincResize::KernelRowAll_sse2_mul_cb;
+					KernelProcAll = &JincResize::KernelRowAll_sse2_mul_cb_frw; // looks like a bit faster at core2 6400 
 			}
 
 		GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_sse2;
@@ -803,7 +803,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 				KernelProcAll = &JincResize::KernelRowAll_c_mul;
 			}
 			else // ap == 2
-				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb;
+				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb; // faster with iC++ in compare with _nz and _frw
 
         switch (vi.ComponentSize())
         {
@@ -1101,9 +1101,170 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 		{
 			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
 		}
+		
+	}
+}
+
+void JincResize::KernelRowAll_c_mul_cb_frw(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
+{
+	// full row-walking
+
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	float* pfCurrKernel = g_pfKernel;
+
+	int64_t num_threads = omp_get_num_threads();
+
+	memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * num_threads * sizeof(float));
+
+	// single threaded for now
+	for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+	{
+		// start all row-only dependent ptrs here
+		// prepare float32 pre-converted row data for each threal separately
+		//		int64_t tidx = omp_get_thread_num();
+		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
+		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+		for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+		{
+			float* pfCurrKernel_pos = pfCurrKernel + k_row * iKernelSize;
+
+			for (int64_t col = iTaps; col < iWidthEl - iTaps; col++)
+			{
+				float *pfProc = vpfRowsPointers[k_row] + col * iMul;
+				float fInpSample = pfInpRowSamplesFloatBufStart[col];
+
+				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+				{
+					pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample;
+				} // k_col 
+
+			} // col
+
+		} // r_row 
+
+		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
+		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
+		{
+			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
+		}
+
+		// circulate pointers to iMul rows upper
+		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
+		}
 
 	}
 }
+
+
+void JincResize::KernelRowAll_c_mul_cb_nz(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
+{
+	// demo version of non-zeroing algorithm at time of main processing,
+	// runs slower in compare with zeroing at some CPUs, need more testing.
+	// may be will be faster with full row-walking processing
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	float* pfCurrKernel = g_pfKernel;
+
+	int64_t num_threads = omp_get_num_threads();
+
+	// zero circulating buf once
+	memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * num_threads * sizeof(float));
+
+	// single threaded for now
+	for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+	{
+		// start all row-only dependent ptrs here
+		int64_t col;
+		float* pfProc;
+		// prepare float32 pre-converted row data for each threal separately
+		//		int64_t tidx = omp_get_thread_num();
+		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
+		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+		col = iTaps; // first col proc
+
+		float fInpSample = pfInpRowSamplesFloatBufStart[col];
+		float* pfCurrKernel_pos = pfCurrKernel;
+
+		for (int64_t k_row = 0; k_row < iKernelSize - iMul; k_row++)
+		{
+			pfProc = vpfRowsPointers[k_row] + col * iMul;
+			for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+			{
+				pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample; // add to old
+			} // k_col 
+			pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+		} // k_row
+
+		// last rows - special proc
+		for (int64_t k_row = iKernelSize - iMul; k_row < iKernelSize; k_row++)
+		{
+			pfProc = vpfRowsPointers[k_row] + col * iMul;
+			for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+			{
+				pfProc[k_col] = pfCurrKernel_pos[k_col] * fInpSample; // zero load - rewrite all kernelrow size
+			} // k_col 
+			pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+		} // k_row
+
+		// other cols proc
+		for (col = iTaps + 1; col < iWidthEl - iTaps; col++) // input cols counter
+		{
+			fInpSample = pfInpRowSamplesFloatBufStart[col];
+			pfCurrKernel_pos = pfCurrKernel;
+
+			for (int64_t k_row = 0; k_row < iKernelSize - iMul; k_row++)
+			{
+				pfProc = vpfRowsPointers[k_row] + col * iMul;
+				for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+				{
+					pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample; // add to old
+				} // k_col 
+				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+			} // k_row
+
+			// last rows - special proc
+			for (int64_t k_row = iKernelSize - iMul; k_row < iKernelSize; k_row++)
+			{
+				pfProc = vpfRowsPointers[k_row] + col * iMul;
+				for (int64_t k_col = 0; k_col < iKernelSize - iMul; k_col++)
+				{
+					pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample; // add to old
+				} // k_col 
+				for (int64_t k_col = iKernelSize - iMul; k_col < iKernelSize; k_col++)
+				{
+					pfProc[k_col] = pfCurrKernel_pos[k_col] * fInpSample; // zero load - rewrite old
+				} // k_col 
+
+				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+			} // k_row
+
+
+		} // col
+
+		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
+		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
+		{
+			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
+		}
+
+		// circulate pointers to iMul rows upper
+		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+	}
+}
+
 
 JincResize::~JincResize()
 {

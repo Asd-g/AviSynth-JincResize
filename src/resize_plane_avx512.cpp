@@ -1,6 +1,6 @@
 #include "JincRessize.h"
 
-#if !defined(__AVX512F__ ) && !defined(__INTEL_COMPILER)
+#if !defined(__AVX512F__ ) //&& !defined(__INTEL_COMPILER)
 template <typename T>
 void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {

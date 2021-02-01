@@ -119,6 +119,71 @@ void JincResize::KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, in
 	} // row
 }
 
+void JincResize::KernelRowAll_avx2_mul_cb_frw(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
+{
+	// current input plane sizes
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	const int k_col8 = iKernelSize - (iKernelSize % 8);
+	float *pfCurrKernel = g_pfKernel;
+
+	memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * sizeof(float));
+
+	// still 1 thread for now
+	for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+	{
+		// start all row-only dependent ptrs here
+
+		// prepare float32 pre-converted row data for each threal separately
+		//int64_t tidx = omp_get_thread_num();
+		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
+		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+		for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+		{
+			float* pfCurrKernel_pos = g_pfKernel + k_row * iKernelSize;
+
+			for (int64_t col = iTaps; col < iWidthEl - iTaps; col++)
+			{
+				float *pfProc = vpfRowsPointers[k_row] + col * iMul;
+				float fInpSample = pfInpRowSamplesFloatBufStart[col];
+
+				for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+				{
+					*(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart[col]), *(__m256*)(pfProc + k_col));
+				}
+
+				// need to process last (up to 7) floats separately..
+				for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
+				{
+					pfProc[k_col] += (pfCurrKernel_pos[k_col] * pfInpRowSamplesFloatBufStart[col]);
+				}
+
+			} // col
+		} // r_row 
+
+		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
+		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
+		{
+			ConvertiMulRowsToInt_avx2(iInpWidth, iOutStartRow, dst, iDstStride);
+		}
+
+		// circulate pointers to iMul rows upper
+		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
+		}
+
+	} // row
+}
+
+
+
 /*Better implementation of Mul2 will be with AVX512 instructions with shift between zmm registers instead of memory referencing with FMA*/
 void JincResize::KernelRow_avx2_mul2_taps8(int64_t iOutWidth)
 {

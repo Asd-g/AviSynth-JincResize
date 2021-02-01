@@ -33,11 +33,7 @@ void JincResize::KernelRowAll_sse2_mul(unsigned char *src, int iSrcStride, int i
 			{
 				for (int64_t k_col = 0; k_col < k_col4; k_col += 4)
 				{
-					__m128 proc = _mm_loadu_ps(pfProc + k_col);
-					__m128 kernel = _mm_load_ps(pfCurrKernel_pos + k_col);
-					__m128 in_sample = _mm_load_ps1(pfInpRowSamplesFloatBufStart + col);
-					proc = _mm_add_ps(proc, _mm_mul_ps(kernel, in_sample));
-					_mm_storeu_ps(pfProc + k_col, proc); // loadu and storeu important or crash at some iMul and iTaps
+					*(__m128*)(pfProc + k_col) = _mm_add_ps(_mm_mul_ps(*(__m128*)(pfCurrKernel_pos + k_col), _mm_load_ps1(pfInpRowSamplesFloatBufStart + col)), *(__m128*)(pfProc + k_col));
 				}
 
 				// need to process last up to 3 floats separately..
@@ -84,16 +80,13 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 			{
 				pfProc = vpfRowsPointers[k_row] + col * iMul;
+
 				for (int64_t k_col = 0; k_col < k_col4; k_col += 4)
 				{
-					__m128 proc = _mm_loadu_ps(pfProc + k_col);
-					__m128 kernel = _mm_load_ps(pfCurrKernel_pos + k_col);
-					__m128 in_sample = _mm_load_ps1(pfInpRowSamplesFloatBufStart + col);
-					proc = _mm_add_ps(proc, _mm_mul_ps(kernel, in_sample));
-					_mm_storeu_ps(pfProc + k_col, proc); // loadu and storeu important or crash at some iMul and iTaps
+					*(__m128*)(pfProc + k_col) = _mm_add_ps(_mm_mul_ps(*(__m128*)(pfCurrKernel_pos + k_col), _mm_load_ps1(pfInpRowSamplesFloatBufStart + col)), *(__m128*)(pfProc + k_col));
 				}
 
-				// need to process last up to 3 floats separately..
+				// need to process last up to 3 floats separately.. 
 				for (int64_t k_col = k_col4; k_col < iKernelSize; ++k_col)
 					pfProc[k_col] += pfCurrKernel_pos[k_col];
 
@@ -119,6 +112,66 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 		}
 	}
 }
+
+void JincResize::KernelRowAll_sse2_mul_cb_frw(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
+{
+	// current input plane sizes
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	// single threaded for now, small memory use so can be used frame-based MT in AvisynthMT
+	const int k_col4 = iKernelSize - (iKernelSize % 4);
+
+	memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * sizeof(float));
+
+	for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+	{
+		// start all row-only dependent ptrs here
+
+		// prepare float32 pre-converted row data 
+		//		int64_t tidx = 1;// omp_get_thread_num();
+		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow;// +tidx * iWidthEl;
+		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+		for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+		{
+			float* pfCurrKernel_pos = g_pfKernel + k_row * iKernelSize;
+
+			for (int64_t col = iTaps; col < iWidthEl - iTaps; col++)
+			{
+				float *pfProc = vpfRowsPointers[k_row] + col * iMul;
+				float fInpSample = pfInpRowSamplesFloatBufStart[col];
+
+				for (int64_t k_col = 0; k_col < k_col4; k_col += 4)
+				{
+					*(__m128*)(pfProc + k_col) = _mm_add_ps(_mm_mul_ps(*(__m128*)(pfCurrKernel_pos + k_col), _mm_load_ps1(pfInpRowSamplesFloatBufStart + col)), *(__m128*)(pfProc + k_col));
+				}
+
+				// need to process last up to 3 floats separately.. 
+				for (int64_t k_col = k_col4; k_col < iKernelSize; ++k_col)
+					pfProc[k_col] += pfCurrKernel_pos[k_col];
+
+			} // col
+		} // r_row 
+
+		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
+		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
+		{
+			ConvertiMulRowsToInt_sse2(iInpWidth, iOutStartRow, dst, iDstStride);
+		}
+
+		// circulate pointers to iMul rows upper
+		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl*iMul * sizeof(float));
+		}
+	}
+}
+
 
 void JincResize::KernelRowAll_sse2_mul2_taps4_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
 {

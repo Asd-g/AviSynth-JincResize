@@ -1,6 +1,6 @@
 #include "JincRessize.h"
 
-#if !defined(__AVX512F__ ) && !defined(__INTEL_COMPILER)
+#if !defined(__AVX512F__ )// && !defined(__INTEL_COMPILER)
 void JincResize::KernelRow_avx512_mul(int64_t iOutWidth)
 {} // do nothing
 #else
