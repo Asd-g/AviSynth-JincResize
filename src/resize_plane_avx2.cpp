@@ -1,8 +1,8 @@
 #include "JincRessize.h"
 
-#if !defined(__AVX2__)
-#error "AVX2 option needed"
-#endif
+//#if !defined(__AVX2__)
+//#error "AVX2 option needed"
+//#endif
 
 template <typename T>
 void JincResize::resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)

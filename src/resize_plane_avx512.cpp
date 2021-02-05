@@ -46,7 +46,8 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
                 const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
                 __m512 result = _mm512_setzero_ps();
 
-                if constexpr (std::is_same_v<T, uint8_t>)
+//                if constexpr (std::is_same_v<T, uint8_t>)
+				if (std::is_same_v<T, uint8_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
@@ -68,7 +69,8 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
                     _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
 
                 }
-                else if constexpr (std::is_same_v<T, uint16_t>)
+//                else if constexpr (std::is_same_v<T, uint16_t>)
+				else if (std::is_same_v<T, uint16_t>)
                 {
                     for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
                     {
