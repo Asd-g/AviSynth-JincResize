@@ -26,7 +26,7 @@ void JincResize::KernelRowAll_avx2_mul(unsigned char *src, int iSrcStride, int i
         // prepare float32 pre-converted row data for each threal separately
         int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
-		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
         {
@@ -74,7 +74,7 @@ void JincResize::KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, in
 		// prepare float32 pre-converted row data for each threal separately
 		//int64_t tidx = omp_get_thread_num();
 		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
-		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
 
 		for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
 		{
@@ -138,7 +138,7 @@ void JincResize::KernelRowAll_avx2_mul_cb_frw(unsigned char *src, int iSrcStride
 		// prepare float32 pre-converted row data for each threal separately
 		//int64_t tidx = omp_get_thread_num();
 		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
-		(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
 
 		for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 		{
@@ -361,7 +361,10 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStr
     iHeightEl = iInpHeight + 2 * iKernelSize;
 
     const int k_col8 = iKernelSize - (iKernelSize % 8);
+    const int col8 = iWidthEl - iTaps - ((iWidthEl - iTaps) % 8);
     float* pfCurrKernel = g_pfKernel;
+
+    int64_t col;
 
     memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * sizeof(float));
 
@@ -372,9 +375,9 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStr
         // prepare float32 pre-converted row data for each threal separately
 //        int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
-        (this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
 
-        for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
+        for (col = iTaps; col < /*iWidthEl - iTaps*/col8; col += 8) // input cols counter
         {
             float* pfColStart = pfInpRowSamplesFloatBufStart + col;
 
@@ -485,6 +488,30 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStr
  
         } // col
 
+        // need to process last up to 7 cols separately...
+        for (col = col8 + iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+        {
+            float* pfCurrKernel_pos = pfCurrKernel;
+            float* pfProc;
+
+            for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+            {
+                pfProc = vpfRowsPointers[k_row] + col * iMul;
+                for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                {
+                    *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart[col]), *(__m256*)(pfProc + k_col));
+                }
+
+                // need to process last (up to 7) floats separately..
+                for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
+                {
+                    pfProc[k_col] += (pfCurrKernel_pos[k_col] * pfInpRowSamplesFloatBufStart[col]);
+                }
+                pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+            } // k_row
+
+        } // col
+
         int iOutStartRow = (row - (iTaps + iKernelSize)) * iMul;
         //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
         if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
@@ -502,6 +529,296 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStr
         } 
     } // row
 }
+
+void JincResize::KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{
+	// current input plane sizes
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	const int k_col8 = iKernelSize - (iKernelSize % 8);
+    const int col20 = iWidthEl - iTaps - ((iWidthEl - iTaps) % 20);
+	float* pfCurrKernel = g_pfKernel;
+    int64_t col;
+
+	memset(pfFilteredCirculatingBuf, 0, iWidthEl * iKernelSize * iMul * sizeof(float));
+
+	// still no MT for now - to be done later 
+	for (int64_t row = iTaps; row < iHeightEl - iTaps; row++) // input lines counter
+	{
+		// start all row-only dependent ptrs here 
+		// prepare float32 pre-converted row data for each threal separately
+		//        int64_t tidx = omp_get_thread_num();
+		float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+		for (col = iTaps; col < /*iWidthEl - iTaps*/col20; col += 20) // input cols counter
+		{
+            float* pfColStart = pfInpRowSamplesFloatBufStart + col;
+
+			float* pfCurrKernel_pos = pfCurrKernel;
+
+			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+			{
+                float* pfProc = vpfRowsPointers[k_row] + col * iMul;
+
+				register __m256 my_ymm0, my_ymm1; // kernel samples
+                register __m256 my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
+				const register __m256i my_ymm8_main_circ = _mm256_set_epi32(1, 0, 7, 6, 5, 4, 3, 2); // main circulating cosst
+                register __m256i my_imm_perm; // to temp ymm
+                register __m256 my_ymm9, my_ymm10, my_ymm11, my_ymm12, my_ymm13; // inp samples
+                register __m256 my_ymm15; //  temp
+
+				my_ymm0 = _mm256_load_ps(pfCurrKernel_pos);
+				my_ymm1 = _mm256_load_ps(pfCurrKernel_pos + 8);
+
+				my_ymm2 = _mm256_load_ps(pfProc);
+				my_ymm3 = _mm256_load_ps(pfProc + 8);
+				my_ymm4 = _mm256_load_ps(pfProc + 16);
+				my_ymm5 = _mm256_load_ps(pfProc + 24);
+				my_ymm6 = _mm256_load_ps(pfProc + 32);
+				my_ymm7 = _mm256_load_ps(pfProc + 40);
+				my_ymm15 = _mm256_load_ps(pfProc + 48); //[in8_01;in8_23;in8_45;xx]
+
+														// !! remove 	my_ymm15 = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0); - debug values for check how permutes work
+				my_imm_perm = _mm256_set_epi32(1, 0, 5, 4, 3, 2, 7, 6);
+				my_ymm15 = _mm256_permutevar8x32_ps(my_ymm15, my_imm_perm); // [xx;in8_23;in8_45;in8_01]
+
+				my_ymm9 = _mm256_broadcast_ss(pfColStart + 0); // 1
+				my_ymm10 = _mm256_broadcast_ss(pfColStart + 4); // 5
+				my_ymm11 = _mm256_broadcast_ss(pfColStart + 8); // 9
+				my_ymm12 = _mm256_broadcast_ss(pfColStart + 12); // 13 
+				my_ymm13 = _mm256_broadcast_ss(pfColStart + 16); // 17 
+
+				// 1st sample
+				my_ymm2 = _mm256_fmadd_ps(my_ymm9, my_ymm0, my_ymm2);
+				my_ymm3 = _mm256_fmadd_ps(my_ymm9, my_ymm1, my_ymm3);
+
+				// 5 sample
+				my_ymm3 = _mm256_fmadd_ps(my_ymm10, my_ymm0, my_ymm3);
+				my_ymm4 = _mm256_fmadd_ps(my_ymm10, my_ymm1, my_ymm4);
+
+				// 9 sample
+				my_ymm4 = _mm256_fmadd_ps(my_ymm11, my_ymm0, my_ymm4);
+				my_ymm5 = _mm256_fmadd_ps(my_ymm11, my_ymm1, my_ymm5);
+
+				// 13 sample
+				my_ymm5 = _mm256_fmadd_ps(my_ymm12, my_ymm0, my_ymm5);
+				my_ymm6 = _mm256_fmadd_ps(my_ymm12, my_ymm1, my_ymm6);
+
+				// 17 sample
+				my_ymm6 = _mm256_fmadd_ps(my_ymm13, my_ymm0, my_ymm6);
+				my_ymm7 = _mm256_fmadd_ps(my_ymm13, my_ymm1, my_ymm7);
+
+				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 01 [out_01;in8_23;in8_45;in8_01]
+
+				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
+
+				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
+
+				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
+
+				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
+
+				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
+
+																  // load next hi 2 ps from temp
+				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_01;in8_45;in8_23;xx]
+
+																   // next samples
+				my_ymm9 = _mm256_broadcast_ss(pfColStart + 1); // 2
+				my_ymm10 = _mm256_broadcast_ss(pfColStart + 5); // 6
+				my_ymm11 = _mm256_broadcast_ss(pfColStart + 9); // 10
+				my_ymm12 = _mm256_broadcast_ss(pfColStart + 13); // 14 
+				my_ymm13 = _mm256_broadcast_ss(pfColStart + 17); // 18 
+
+				my_imm_perm = _mm256_set_epi32(3, 2, 1, 0, 5, 4, 7, 6);
+				my_ymm15 = _mm256_permutevar8x32_ps(my_ymm15, my_imm_perm); // [xx;in8_45;out_01;in8_23]
+
+				// 2 sample
+				my_ymm2 = _mm256_fmadd_ps(my_ymm9, my_ymm0, my_ymm2);
+				my_ymm3 = _mm256_fmadd_ps(my_ymm9, my_ymm1, my_ymm3);
+
+				// 6 sample
+				my_ymm3 = _mm256_fmadd_ps(my_ymm10, my_ymm0, my_ymm3);
+				my_ymm4 = _mm256_fmadd_ps(my_ymm10, my_ymm1, my_ymm4);
+
+				// 10 sample
+				my_ymm4 = _mm256_fmadd_ps(my_ymm11, my_ymm0, my_ymm4);
+				my_ymm5 = _mm256_fmadd_ps(my_ymm11, my_ymm1, my_ymm5);
+
+				// 14 sample
+				my_ymm5 = _mm256_fmadd_ps(my_ymm12, my_ymm0, my_ymm5);
+				my_ymm6 = _mm256_fmadd_ps(my_ymm12, my_ymm1, my_ymm6);
+
+				// 18 sample
+				my_ymm6 = _mm256_fmadd_ps(my_ymm13, my_ymm0, my_ymm6);
+				my_ymm7 = _mm256_fmadd_ps(my_ymm13, my_ymm1, my_ymm7);
+
+				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 23 [out_23;in8_45;out_01;in8_23]
+
+				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
+
+				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
+
+				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
+
+				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
+
+				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
+
+				// load next hi 2 ps from temp
+				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_23;in8_45;out_01;xx]
+
+				// next samples
+				my_ymm9 = _mm256_broadcast_ss(pfColStart + 2); // 3
+				my_ymm10 = _mm256_broadcast_ss(pfColStart + 6); // 7
+				my_ymm11 = _mm256_broadcast_ss(pfColStart + 10); // 11
+				my_ymm12 = _mm256_broadcast_ss(pfColStart + 14); // 15 
+				my_ymm13 = _mm256_broadcast_ss(pfColStart + 18); // 19 
+
+				my_imm_perm = _mm256_set_epi32(3, 2, 5, 4, 1, 0, 7, 6);
+				my_ymm15 = _mm256_permutevar8x32_ps(my_ymm15, my_imm_perm); // [xx;out_23;out_01;in8_45]
+
+				// 3 sample
+				my_ymm2 = _mm256_fmadd_ps(my_ymm9, my_ymm0, my_ymm2);
+				my_ymm3 = _mm256_fmadd_ps(my_ymm9, my_ymm1, my_ymm3);
+
+				// 7 sample
+				my_ymm3 = _mm256_fmadd_ps(my_ymm10, my_ymm0, my_ymm3);
+				my_ymm4 = _mm256_fmadd_ps(my_ymm10, my_ymm1, my_ymm4);
+
+				// 11 sample
+				my_ymm4 = _mm256_fmadd_ps(my_ymm11, my_ymm0, my_ymm4);
+				my_ymm5 = _mm256_fmadd_ps(my_ymm11, my_ymm1, my_ymm5);
+
+				// 15 sample
+				my_ymm5 = _mm256_fmadd_ps(my_ymm12, my_ymm0, my_ymm5);
+				my_ymm6 = _mm256_fmadd_ps(my_ymm12, my_ymm1, my_ymm6);
+
+				// 19 sample
+				my_ymm6 = _mm256_fmadd_ps(my_ymm13, my_ymm0, my_ymm6);
+				my_ymm7 = _mm256_fmadd_ps(my_ymm13, my_ymm1, my_ymm7);
+
+				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out45 [out_45;out_23;out_01;in8_45]
+
+				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
+
+				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
+
+				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
+
+				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
+
+				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
+
+				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_45;out_23;out_01;xx]
+
+																   // next samples
+				my_ymm9 = _mm256_broadcast_ss(pfColStart + 3); // 4
+				my_ymm10 = _mm256_broadcast_ss(pfColStart + 7); // 8
+				my_ymm11 = _mm256_broadcast_ss(pfColStart + 11); // 12
+				my_ymm12 = _mm256_broadcast_ss(pfColStart + 15); // 16 
+				my_ymm13 = _mm256_broadcast_ss(pfColStart + 19); // 20 
+
+				// final permute before store
+				my_imm_perm = _mm256_set_epi32(7, 6, 1, 0, 3, 2, 5, 4);
+				my_ymm15 = _mm256_permutevar8x32_ps(my_ymm15, my_imm_perm); // [out_01;out_23;out_45;xx]
+
+				// 4 sample
+				my_ymm2 = _mm256_fmadd_ps(my_ymm9, my_ymm0, my_ymm2);
+				my_ymm3 = _mm256_fmadd_ps(my_ymm9, my_ymm1, my_ymm3);
+
+				// 8 sample
+				my_ymm3 = _mm256_fmadd_ps(my_ymm10, my_ymm0, my_ymm3);
+				my_ymm4 = _mm256_fmadd_ps(my_ymm10, my_ymm1, my_ymm4);
+
+				// 12 sample
+				my_ymm4 = _mm256_fmadd_ps(my_ymm11, my_ymm0, my_ymm4);
+				my_ymm5 = _mm256_fmadd_ps(my_ymm11, my_ymm1, my_ymm5);
+
+				// 16 sample
+				my_ymm5 = _mm256_fmadd_ps(my_ymm12, my_ymm0, my_ymm5);
+				my_ymm6 = _mm256_fmadd_ps(my_ymm12, my_ymm1, my_ymm6);
+
+				// 20 sample
+				my_ymm6 = _mm256_fmadd_ps(my_ymm13, my_ymm0, my_ymm6);
+				my_ymm7 = _mm256_fmadd_ps(my_ymm13, my_ymm1, my_ymm7);
+
+
+				_mm256_store_ps(pfProc, my_ymm15);
+				_mm256_store_ps(pfProc + 6, my_ymm2);
+				_mm256_store_ps(pfProc + 14, my_ymm3);
+				_mm256_store_ps(pfProc + 22, my_ymm4);
+				_mm256_store_ps(pfProc + 30, my_ymm5);
+				_mm256_store_ps(pfProc + 38, my_ymm6);
+				_mm256_store_ps(pfProc + 46, my_ymm7);
+
+				pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+			} // k_row
+
+		} // col
+
+        // need to process last up to 19 cols separately...
+        for (col = col20 + iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+        {
+            float* pfCurrKernel_pos = pfCurrKernel;
+            float* pfProc;
+
+            for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+            {
+                pfProc = vpfRowsPointers[k_row] + col * iMul;
+                for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                {
+                    *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart[col]), *(__m256*)(pfProc + k_col));
+                }
+
+                // need to process last (up to 7) floats separately..
+                for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
+                {
+                    pfProc[k_col] += (pfCurrKernel_pos[k_col] * pfInpRowSamplesFloatBufStart[col]);
+                }
+                pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+            } // k_row
+
+        } // col
+
+		int iOutStartRow = (row - (iTaps + iKernelSize)) * iMul;
+		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
+		{
+			ConvertiMulRowsToInt_avx2(iInpWidth, iOutStartRow, dst, iDstStride);
+		}
+
+		// circulate pointers to iMul rows upper
+		std::rotate(vpfRowsPointers.begin(), vpfRowsPointers.begin() + iMul, vpfRowsPointers.end());
+
+		// clear last iMul rows
+		for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+		{
+			memset(vpfRowsPointers[i], 0, iWidthEl * iMul * sizeof(float));
+		}
+	} // row
+}
+
 
 void JincResize::KernelRowAll_avx2_mul4_taps4(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
 {
@@ -524,7 +841,7 @@ void JincResize::KernelRowAll_avx2_mul4_taps4(unsigned char* src, int iSrcStride
         // prepare float32 pre-converted row data for each threal separately
         int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
-        (this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col += 8) // input cols counter
         {
@@ -853,7 +1170,7 @@ void JincResize::ConvertToInt_avx2(int iInpWidth, int iInpHeight, unsigned char*
     }
 }
 
-void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
+__forceinline void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
 {
 	const int col32 = (iInpWidth*iMul) - ((iInpWidth*iMul) % 32);
 
@@ -925,7 +1242,7 @@ void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsi
 	} // row
 }
 
-void JincResize::GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst)
+__forceinline void JincResize::GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst)
 {
     int64_t col;
 

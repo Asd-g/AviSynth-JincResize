@@ -29,6 +29,7 @@ void JincResize::KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int
         int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
         (this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+//        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart); // still no avx512
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
         {
@@ -52,6 +53,8 @@ void JincResize::KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int
             } // k_row
         } // col
     }
+
+    ConvertToInt_avx2(iInpWidth, iInpHeight, dst, iDstStride);
 }
 
 void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
@@ -110,6 +113,78 @@ void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, 
         {
             memset(vpfRowsPointers[i], 0, iWidthEl * iMul * sizeof(float));
         }
+    } // row
+}
+
+__forceinline void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride) // still no avx512 version
+{
+    const int col32 = (iInpWidth * iMul) - ((iInpWidth * iMul) % 32);
+
+    __m256 my_zero_ymm2;
+
+    int row_float_buf_index = 0;
+
+    for (int64_t row = iOutStartRow; row < iOutStartRow + iMul; row++)
+    {
+        my_zero_ymm2 = _mm256_setzero_ps();
+
+        int64_t col = 0;
+        float* pfProc = vpfRowsPointers[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
+        unsigned char* pucDst = dst + row * (int64_t)iDstStride;
+
+        for (col = 0; col < col32; col += 32)
+        {
+            __m256 my_Val_ymm1 = _mm256_load_ps(pfProc);
+            __m256 my_Val_ymm2 = _mm256_load_ps(pfProc + 8);
+            __m256 my_Val_ymm3 = _mm256_load_ps(pfProc + 16);
+            __m256 my_Val_ymm4 = _mm256_load_ps(pfProc + 24);
+
+            my_Val_ymm1 = _mm256_max_ps(my_Val_ymm1, my_zero_ymm2);
+            my_Val_ymm2 = _mm256_max_ps(my_Val_ymm2, my_zero_ymm2);
+            my_Val_ymm3 = _mm256_max_ps(my_Val_ymm3, my_zero_ymm2);
+            my_Val_ymm4 = _mm256_max_ps(my_Val_ymm4, my_zero_ymm2);
+
+            __m256i my_iVal_ymm1 = _mm256_cvtps_epi32(my_Val_ymm1);
+            __m256i my_iVal_ymm2 = _mm256_cvtps_epi32(my_Val_ymm2);
+            __m256i my_iVal_ymm3 = _mm256_cvtps_epi32(my_Val_ymm3);
+            __m256i my_iVal_ymm4 = _mm256_cvtps_epi32(my_Val_ymm4);
+
+            __m256i my_iVal_12 = _mm256_packus_epi32(my_iVal_ymm1, my_iVal_ymm2);
+            __m256i my_iVal_34 = _mm256_packus_epi32(my_iVal_ymm3, my_iVal_ymm4);
+
+            __m256i my_iVal_1234 = _mm256_packus_epi16(my_iVal_12, my_iVal_34);
+
+            __m256i my_iVal_ymm1234 = _mm256_permutevar8x32_epi32(my_iVal_1234, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
+
+            _mm256_stream_si256((__m256i*)(pucDst), my_iVal_ymm1234);
+
+            pucDst += 32;
+            pfProc += 32;
+        }
+        // last up to 31..
+        for (int64_t l_col = col32; l_col < iInpWidth * iMul; ++l_col)
+        {
+
+            float fVal = *pfProc;
+
+            fVal += 0.5f;
+
+            if (fVal > 255.0f)
+            {
+                fVal = 255.0f;
+            }
+            if (fVal < 0.0f)
+            {
+                fVal = 0.0f;
+            }
+
+            *pucDst = (unsigned char)fVal;
+
+            pucDst++;
+            pfProc++;
+        } //l_col
+
+        row_float_buf_index++;
     } // row
 }
 #endif
