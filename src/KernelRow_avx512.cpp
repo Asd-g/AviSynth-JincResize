@@ -6,6 +6,9 @@ void JincResize::KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int
 
 void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
 {} // do nothing
+
+void JincResize::KernelRowAll_avx512_mul_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{} // do nothing
 #else
 
 void JincResize::KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
@@ -103,7 +106,7 @@ void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, 
         //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
         if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
         {
-            ConvertiMulRowsToInt_avx2(iInpWidth, iOutStartRow, dst, iDstStride);
+            ConvertiMulRowsToInt_avx2(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
         }
 
         // circulate pointers to iMul rows upper
@@ -117,7 +120,90 @@ void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, 
     } // row
 }
 
-__forceinline void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride) // still no avx512 version
+void JincResize::KernelRowAll_avx512_mul_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{
+    // current input plane sizes
+    iWidthEl = iInpWidth + 2 * iKernelSize;
+    iHeightEl = iInpHeight + 2 * iKernelSize;
+
+    const int k_col16 = iKernelSize - (iKernelSize % 16);
+
+    const int64_t iNumRowsPerThread = (iHeightEl - 2 * iTaps) / threads_;
+
+    // initial clearing
+    for (int j = 0; j < threads_; j++)
+    {
+        for (int i = 0; i < iKernelSize; i++)
+        {
+            memset(vpvThreadsVectors[j][i], 0, iWidthEl * iMul * sizeof(float));
+        }
+    }
+
+#pragma omp parallel num_threads(threads_)
+    {
+        // start all thread dependent ptrs here
+        int64_t tidx = omp_get_thread_num(); // our thread id here
+
+        std::vector<float*> vpfThreadVector = vpvThreadsVectors[tidx];
+        // it looks vpfThreadVector uses copy of vector from vpvThreadsVectors and it may be slower, TO DO - remake to pointer to vector
+
+        // calculate rows to process in this thread
+        int64_t iStartRow = tidx * iNumRowsPerThread;
+        int64_t iThreadSkipRows = iTaps * 2;
+        // some check
+        if (iStartRow < iTaps) iStartRow = iTaps;
+        int64_t iEndRow = iStartRow + iNumRowsPerThread + 2 * iTaps;
+        if (iEndRow > iHeightEl - iTaps) iEndRow = iHeightEl - iTaps;
+
+        for (int64_t row = iStartRow; row < iEndRow; row++)
+        {
+            float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+            GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart); // still no avx512
+
+            for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+            {
+                float* pfCurrKernel_pos = g_pfKernel;
+                float* pfProc;
+
+                for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+                {
+                    pfProc = vpfThreadVector[k_row] + col * iMul;
+                    for (int64_t k_col = 0; k_col < k_col16; k_col += 16)
+                    {
+                        *(__m512*)(pfProc + k_col) = _mm512_fmadd_ps(*(__m512*)(pfCurrKernel_pos + k_col), _mm512_broadcast_f32x4(_mm_load_ps1(pfInpRowSamplesFloatBufStart + col)), *(__m512*)(pfProc + k_col));
+                    }
+
+                    // need to process last up to 15 floats separately..
+                    for (int64_t k_col = k_col16; k_col < iKernelSize; ++k_col)
+                        pfProc[k_col] += pfCurrKernel_pos[k_col];
+
+                    pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+                } // k_row
+            } // col
+
+            int iOutStartRow = (row - (iTaps + iKernelSize)) * iMul;
+            //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+            if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul && iThreadSkipRows <= 0)
+            {
+                // it looks vpfThreadVector uses copy of vector and it may be slower, TO DO - remake to pointer to vector
+                ConvertiMulRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride);
+            }
+
+            iThreadSkipRows--;
+
+            // circulate pointers to iMul rows upper
+            std::rotate(vpfThreadVector.begin(), vpfThreadVector.begin() + iMul, vpfThreadVector.end());
+
+            // clear last iMul rows
+            for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+            {
+                memset(vpfThreadVector[i], 0, iWidthEl * iMul * sizeof(float));
+            }
+        } // row
+    } // parallel section
+}
+
+__forceinline void JincResize::ConvertiMulRowsToInt_avx2(std::vector<float*>Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
 {
     const int col32 = (iInpWidth * iMul) - ((iInpWidth * iMul) % 32);
 
@@ -130,7 +216,8 @@ __forceinline void JincResize::ConvertiMulRowsToInt_avx2(int iInpWidth, int iOut
         my_zero_ymm2 = _mm256_setzero_ps();
 
         int64_t col = 0;
-        float* pfProc = vpfRowsPointers[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
+        //		float* pfProc = vpfRowsPointers[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
+        float* pfProc = Vector[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
         unsigned char* pucDst = dst + row * (int64_t)iDstStride;
 
         for (col = 0; col < col32; col += 32)

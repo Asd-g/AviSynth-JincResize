@@ -99,7 +99,7 @@ void JincResize::KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, in
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_sse2(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_sse2(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper
@@ -158,7 +158,7 @@ void JincResize::KernelRowAll_sse2_mul_cb_frw(unsigned char *src, int iSrcStride
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_sse2(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_sse2(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 		
 		// circulate pointers to iMul rows upper
@@ -385,7 +385,7 @@ void JincResize::KernelRowAll_sse2_mul2_taps4_cb(unsigned char *src, int iSrcStr
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_sse2(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_sse2(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper
@@ -401,7 +401,7 @@ void JincResize::KernelRowAll_sse2_mul2_taps4_cb(unsigned char *src, int iSrcStr
 
 
 
-void JincResize::ConvertiMulRowsToInt_sse2(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
+void JincResize::ConvertiMulRowsToInt_sse2(std::vector<float*>Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
 {
 	const int col16 = (iInpWidth*iMul) - ((iInpWidth*iMul) % 16);
 
@@ -411,7 +411,7 @@ void JincResize::ConvertiMulRowsToInt_sse2(int iInpWidth, int iOutStartRow, unsi
 	{
 		__m128 my_zero_xmm2 = _mm_setzero_ps();
 
-		float* pfProc =  vpfRowsPointers[row_float_buf_index] + (iKernelSize + iTaps) * iMul;
+		float* pfProc = Vector[row_float_buf_index]/*vpfRowsPointers[row_float_buf_index]*/ + (iKernelSize + iTaps) * iMul;
 		unsigned char* pucDst = dst + row * iDstStride;
 
 		for (int col = 0; col < col16; col += 16)
