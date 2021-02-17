@@ -94,9 +94,7 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
  - ap (JincResize only)\
     Sets which procesing optimizations to use.\
     0: Old 'large-kernel'. Can upsize and downsize with any ratio.\
-    1: Alternative 1. Can use multithreading with 'threads' parameter. \
-       Only upsize with integer ratio equal for width and height. \
-       Uses significally less memory. \
-    2: Alternative 2. Uses even less memory. Runs only 1 thread now. For multithreading use Avisynth MT. \
+    1: Alternative 1. Not for use - will be deleted soon. \
+    2: Alternative 2. Uses even less memory. Can use multithreading with 'threads' parameter. Runs 1 thread or > 1 thread with different a bit internal resamplers. \
        Only upsize with integer ratio equal for width and height.
     Default: 0.
