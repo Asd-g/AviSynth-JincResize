@@ -674,17 +674,29 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
          SzFilteredImageBuffer = iWidthEl * iHeightEl * iMul * iMul * sizeof(float); // assume largest size input plane
         g_pfFilteredImageBuffer = (float*)_mm_malloc(SzFilteredImageBuffer, 32);
 
+
 		pfFilteredCirculatingBuf = (float*)_mm_malloc(iWidthEl * iKernelSize * (iMul + 1) * sizeof(float), 32); // +1 looks like buf overrun somwhere
 
         // buffer to hold temp converted to float32 input line for each processing thread
         pfInpFloatRow = (float*)_mm_malloc(iWidthEl * iMul * threads_ * sizeof(float), 32); 
-
 
 		for (int i = 0; i < iKernelSize; i++)
 		{
 			vpfRowsPointers.push_back(pfFilteredCirculatingBuf + i * iWidthEl * iMul);
 		}
 
+		// some hand-written multithreading...
+		for (int j = 0; j < threads_; j++)
+		{
+			std::vector<float*>* ThreadRowPointers = new std::vector<float*>();
+
+			for (int i = 0; i < iKernelSize; i++)
+			{
+				ThreadRowPointers->push_back((float*)_mm_malloc(iWidthEl * (iMul + 1)  * sizeof(float), 32)); // +1 looks like buf overrun somwhere
+			}
+
+			vpvThreadsVectors.push_back(*ThreadRowPointers);
+		}
       
     }
     else
@@ -724,10 +736,12 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
             if (ap == 1)
                 KernelProcAll = &JincResize::KernelRowAll_avx512_mul;
             else // ap == 2
-                KernelProcAll = &JincResize::KernelRowAll_avx512_mul_cb;
+                if (threads_ == 1)
+                    KernelProcAll = &JincResize::KernelRowAll_avx512_mul_cb;
+                else
+                    KernelProcAll = &JincResize::KernelRowAll_avx512_mul_cb_mt;
 
             ConvertToInt = &JincResize::ConvertToInt_avx2; // still no avx512
-            GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_avx2; // still no avx512
         }
  
         switch (vi.ComponentSize())
@@ -741,17 +755,35 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     {
         if (bAddProc)
         {
-			if (ap == 1)
-              if (iMul == 4 && iTaps == 4)  KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4; // may be do AVS function JincUpsize64_x4(), still only avx2+fma for now
-			  else  KernelProcAll = &JincResize::KernelRowAll_avx2_mul;
-			else // ap == 2
-                if (iMul == 4 && iTaps == 4)  KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4_cb;
-				if (iMul == 2 && iTaps == 4)  KernelProcAll = &JincResize::KernelRowAll_avx2_mul2_taps4_cb;
+            if (ap == 1)
+            {
+                KernelProcAll = &JincResize::KernelRowAll_avx2_mul;
+            }
+            else // ap == 2
+            {
+                if (iMul == 4 && iTaps == 4)
+                {
+                    if (threads_ == 1)
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4_cb;
+                    else
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt;
+                }
+                else                
+                if (iMul == 2 && iTaps == 4)
+                {
+                    if (threads_ == 1)
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul2_taps4_cb;
+                    else
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul2_taps4_cb_mt;
+                }
                 else
-				    KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb;
+                    if (threads_ == 1)
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb;
+                    else
+                        KernelProcAll = &JincResize::KernelRowAll_avx2_mul_cb_mt;
+            }
 
           ConvertToInt = &JincResize::ConvertToInt_avx2;
-          GetInpElRowAsFloat = &JincResize::GetInpElRowAsFloat_avx2; 
 
         }
 
@@ -814,8 +846,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 				KernelProcAll = &JincResize::KernelRowAll_c_mul;
 			}
 			else // ap == 2
-//				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb; // faster with iC++ in compare with _nz and _frw
-				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_is;
+				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_mt; // faster with iC++ in compare with _nz and _frw
+//				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_is;
 
         switch (vi.ComponentSize())
         {
@@ -962,16 +994,17 @@ void JincResize::ConvertToInt_c(int iInpWidth, int iInpHeight, unsigned char* ds
     }
 }
 
-void JincResize::ConvertiMulRowsToInt_c(int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
+void JincResize::ConvertiMulRowsToInt_c(std::vector<float*>Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride)
 {
 	int row_float_buf_index = 0;
 	int iShift = (iKernelSize + iTaps) * iMul;
 	for (int row = iOutStartRow; row < iOutStartRow + iMul; row++)
 	{
+		float *pfSrc = Vector[row_float_buf_index];
 		for (int col = 0; col < iInpWidth * iMul; col++)
 		{
 			unsigned char ucVal;
-			float fVal = vpfRowsPointers[row_float_buf_index][col + iShift];
+			float fVal = pfSrc[col + iShift];
 
 			fVal += 0.5f;
 
@@ -1102,7 +1135,7 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_c(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper
@@ -1116,6 +1149,85 @@ void JincResize::KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int i
 		
 	}
 }
+
+/* internally multithreaded version finally */
+void JincResize::KernelRowAll_c_mul_cb_mt(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
+{
+	iWidthEl = iInpWidth + 2 * iKernelSize;
+	iHeightEl = iInpHeight + 2 * iKernelSize;
+
+	const int64_t iNumRowsPerThread = (iHeightEl - 2 * iTaps) / threads_;
+
+	// initial clearing
+	for (int j = 0; j < threads_; j++)
+	{
+		for (int i = 0; i < iKernelSize; i++)
+		{
+			memset(vpvThreadsVectors[j][i], 0, iWidthEl * iMul * sizeof(float));
+		}
+	}
+
+#pragma omp parallel num_threads(threads_)
+	{
+		// start all thread dependent ptrs here
+		int64_t tidx = omp_get_thread_num(); // our thread id here
+
+		std::vector<float*> vpfThreadVector = vpvThreadsVectors[tidx];
+		// it looks vpfThreadVector uses copy of vector from vpvThreadsVectors and it may be slower, TO DO - remake to pointer to vector
+
+		// calculate rows to process in this thread
+		int64_t iStartRow = tidx * iNumRowsPerThread;
+		int64_t iThreadSkipRows = iTaps * 2;
+		// some check
+		if (iStartRow < iTaps) iStartRow = iTaps;
+		int64_t iEndRow = iStartRow + iNumRowsPerThread + 2 * iTaps;
+		if (iEndRow > iHeightEl - iTaps) iEndRow = iHeightEl - iTaps;
+
+		for (int64_t row = iStartRow; row < iEndRow; row++)
+		{
+			float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+			(this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
+
+			for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
+			{
+				float fInpSample = pfInpRowSamplesFloatBufStart[col];
+				float* pfCurrKernel_pos = g_pfKernel;
+				float* pfProc;
+
+				for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+				{
+					pfProc = vpfThreadVector[k_row] + col * iMul;
+					for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+					{
+						pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample;
+					} // k_col 
+					pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+				} // k_row
+
+			} // col
+
+			int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
+			//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+			if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul && iThreadSkipRows <= 0)
+			{
+				// it looks vpfThreadVector uses copy of vector and it may be slower, TO DO - remake to pointer to vector
+				ConvertiMulRowsToInt_c(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride);
+			}
+
+			iThreadSkipRows--;
+
+			// circulate pointers to iMul rows upper
+			std::rotate(vpfThreadVector.begin(), vpfThreadVector.begin() + iMul, vpfThreadVector.end());
+
+			// clear last iMul rows
+			for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+			{
+				memset(vpfThreadVector[i], 0, iWidthEl*iMul * sizeof(float));
+			}
+		} // row
+	} // parallel section
+}
+
 
 void JincResize::KernelRowAll_c_mul_cb_is(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
 {
@@ -1233,13 +1345,13 @@ void JincResize::KernelRowAll_c_mul_cb_frw(unsigned char *src, int iSrcStride, i
 
 			} // col
 
-		} // r_row 
+		} // k_row 
 
 		int iOutStartRow = (row - (iTaps + iKernelSize))*iMul;
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_c(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
         
 		// circulate pointers to iMul rows upper
@@ -1346,7 +1458,7 @@ void JincResize::KernelRowAll_c_mul_cb_nz(unsigned char *src, int iSrcStride, in
 		//iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
 		if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul)
 		{
-			ConvertiMulRowsToInt_c(iInpWidth, iOutStartRow, dst, iDstStride);
+			ConvertiMulRowsToInt_c(vpfRowsPointers, iInpWidth, iOutStartRow, dst, iDstStride);
 		}
 
 		// circulate pointers to iMul rows upper
@@ -1374,7 +1486,19 @@ JincResize::~JincResize()
         _mm_free(g_pfFilteredImageBuffer);
 		_mm_free(pfFilteredCirculatingBuf);
     	_mm_free(pfInpFloatRow);
-    }
+
+		// multithreading..
+		for (int j = 0; j < threads_; j++)
+		{
+			for (int i = 0; i < iKernelSize; i++)
+			{
+				// free threads mallocs
+				_mm_free(vpvThreadsVectors[j][i]);
+			}
+			// delete threads vectors of pointers to rows bufs
+//			delete &vpvThreadsVectors[j];
+		} 
+    } 
 }
 
 PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
