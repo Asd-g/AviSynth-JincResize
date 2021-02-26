@@ -773,9 +773,10 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
                 {
                     if (threads_ == 1)
                         //KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb; 
-                        KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_2r; // - to be debugged
+//                        KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_2r; // - to be debugged
+                        KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_nvs;
                     else
-                        KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt;
+                        KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_nvs;
                         //KernelProcAll_MTK = &JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r; //-- a bit faster, need to debug later
                 }
                 else                
@@ -858,7 +859,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 			}
 			else // ap == 2
 //				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_mt; // faster with iC++ in compare with _nz and _frw
-				KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_2r;
+				//KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_2r;
+                KernelProcAll = &JincResize::KernelRowAll_c_mul_cb_mt_nvs;
 
         switch (vi.ComponentSize())
         {
@@ -1035,6 +1037,41 @@ void JincResize::ConvertNRowsToInt_c(std::vector<float*>const& Vector, int iInpW
 	}
 }
 
+void JincResize::ConvertNRowsNColsToInt_c(std::vector<float*>const& Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, const int iDstStride, const int iNumRows, const int iStartCol, const int iNumCols, const int iDstWidth)
+{
+    int row_float_buf_index = 0;
+    int iShift = iTaps*iMul;// (iKernelSize + iTaps)* iMul;
+    int iEndCol = iStartCol + iNumCols; 
+    if (iEndCol > iDstWidth) iEndCol = iDstWidth - 1;
+
+    for (int row = iOutStartRow; row < iOutStartRow + iNumRows; row++)
+    {
+        float* pfSrc = Vector[row_float_buf_index];
+        for (int col = iStartCol; col < iEndCol; col++)
+        {
+            unsigned char ucVal;
+            float* pfCurrVal = pfSrc + col + iShift;
+//            float fVal = pfSrc[col + iShift];
+            float fVal = *pfCurrVal;
+
+            fVal += 0.5f;
+
+            if (fVal > 255.0f)
+            {
+                fVal = 255.0f;
+            }
+            if (fVal < 0.0f)
+            {
+                fVal = 0.0f;
+            }
+            ucVal = (unsigned char)fVal;
+
+            dst[(row * iDstStride + col)] = ucVal;
+        }
+        row_float_buf_index++;
+    }
+}
+
 void JincResize::GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth,  unsigned char* pCurr_src, int iCurrSrcStride, float* dst)
 {
     int64_t col;
@@ -1057,6 +1094,38 @@ void JincResize::GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurr
     for (col = iKernelSize + iCurrInpWidth; col < iWidthEl; col++) // right
     {
         dst[col] = (float)pCurr_src[((iInpRow - iKernelSize) * iCurrSrcStride) + (iCurrInpWidth - 1)];
+    }
+}
+
+void JincResize::GetInpElNColsAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst, int iColStart, int iNumCols)
+{
+    int64_t col;
+    // row range from iTaps to iHeightEl - iTaps - 1
+
+    if (iInpRow < iKernelSize) iInpRow = iKernelSize;
+    if (iInpRow > (iCurrInpHeight + iKernelSize - 1)) iInpRow = iCurrInpHeight + iKernelSize - 1;
+
+    // start cols
+    for (col = iColStart; col < iKernelSize; col++) // left
+    {
+        dst[col] = (float)pCurr_src[((iInpRow - iKernelSize) * iCurrSrcStride) + 0];
+
+        iNumCols--;
+        if (iNumCols == 0) return; // may be slow but so for now. TO DO - rewrite
+    }
+    // mid cols
+    for (; col < iKernelSize + iCurrInpWidth; col++) // left
+    {
+        dst[col] = (float)pCurr_src[((iInpRow - iKernelSize) * iCurrSrcStride) + (col - iKernelSize)];
+        iNumCols--;
+        if (iNumCols == 0) return;
+    }
+    // end cols
+    for (; col < iWidthEl; col++) // right
+    {
+        dst[col] = (float)pCurr_src[((iInpRow - iKernelSize) * iCurrSrcStride) + (iCurrInpWidth - 1)];
+        iNumCols--;
+        if (iNumCols == 0) return;
     }
 }
 
@@ -1317,6 +1386,95 @@ void JincResize::KernelRowAll_c_mul_cb_mt(unsigned char *src, int iSrcStride, in
 	} // parallel section
 }
 
+/* circulating buf narrow vertical strips scan version
+size of used circ buf ~half of each core L1d cache size
+*/
+void JincResize::KernelRowAll_c_mul_cb_mt_nvs(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride)
+{
+    iWidthEl = iInpWidth + 2 * iKernelSize;
+    iHeightEl = iInpHeight + 2 * iKernelSize;
+
+    const int64_t iNumRowsPerThread = (iHeightEl - 2 * iTaps) / threads_;
+
+    const int64_t iNumColumnsPerVStrip = 32; //  (iHeightEl - 2 * iTaps) / threads_; - temp 32 for full hd to 8k test
+    const int64_t iNumVStrips = iWidthEl / iNumColumnsPerVStrip;
+
+    // initial clearing
+    for (int j = 0; j < threads_; j++)
+    {
+        for (int i = 0; i < iKernelSize; i++)
+        {
+            memset(vpvThreadsVectors[j][i], 0, iWidthEl * iMul * sizeof(float));
+        }
+    }
+
+#pragma omp parallel num_threads(threads_)
+    {
+        // start all thread dependent ptrs here
+        int64_t tidx = omp_get_thread_num(); // our thread id here
+        float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
+
+        std::vector<float*> vpfThreadVector = vpvThreadsVectors[tidx];
+        // it looks vpfThreadVector uses copy of vector from vpvThreadsVectors and it may be slower, TO DO - remake to pointer to vector
+
+        for (int64_t iVStrip = 0; iVStrip < iNumVStrips - 1; iVStrip++)
+        {
+            int64_t iStartCol = iVStrip * iNumColumnsPerVStrip;
+            int64_t iEndCol = iStartCol + iNumColumnsPerVStrip;
+
+            if (iEndCol > iWidthEl - iTaps) iEndCol = iWidthEl - iTaps;
+
+            // calculate rows to process in this thread
+            int64_t iStartRow = tidx * iNumRowsPerThread;
+            int64_t iThreadSkipRows = iTaps * 2;
+            // some check
+            if (iStartRow < iTaps) iStartRow = iTaps;
+            int64_t iEndRow = iStartRow + iNumRowsPerThread + 2 * iTaps;
+            if (iEndRow > iHeightEl - iTaps) iEndRow = iHeightEl - iTaps;
+
+            for (int64_t row = iStartRow; row < iEndRow; row++)
+            {
+                GetInpElNColsAsFloat_c(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart, iStartCol, iNumColumnsPerVStrip);
+
+                for (int64_t col = /*iTaps*/ + iStartCol; col < iEndCol/*iWidthEl - iTaps*/; col++) // input cols counter
+                {
+                    float fInpSample = pfInpRowSamplesFloatBufStart[col];
+                    float* pfCurrKernel_pos = g_pfKernel;
+                    float* pfProc;
+
+                    for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
+                    {
+                        pfProc = vpfThreadVector[k_row] + col * iMul;
+                        for (int64_t k_col = 0; k_col < iKernelSize; k_col++)
+                        {
+                            pfProc[k_col] += pfCurrKernel_pos[k_col] * fInpSample;
+                        } // k_col 
+                        pfCurrKernel_pos += iKernelSize; // point to next kernel row now
+                    } // k_row
+
+                } // col
+
+                int iOutStartRow = (row - (iTaps + iKernelSize)) * iMul;
+                //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+                if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*iMul && iThreadSkipRows <= 0)
+                {
+                     ConvertNRowsNColsToInt_c(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, iMul, iStartCol * iMul, iNumColumnsPerVStrip * iMul, iInpWidth * iMul);
+                }
+
+                iThreadSkipRows--;
+
+                // circulate pointers to iMul rows upper
+                std::rotate(vpfThreadVector.begin(), vpfThreadVector.begin() + iMul, vpfThreadVector.end());
+
+                // clear last iMul rows
+                for (int i = iKernelSize - iMul; i < iKernelSize; i++)
+                {
+                    memset(vpfThreadVector[i], 0, iWidthEl * iMul * sizeof(float));
+                }
+            } // row
+        } // iVStrip
+    } // parallel section
+}
 
 void JincResize::KernelRowAll_c_mul_cb_is(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride)
 {
