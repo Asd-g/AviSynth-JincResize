@@ -32,7 +32,7 @@ void JincResize::KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int
         int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
 //        (this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
-        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart); // still no avx512
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart, iKernelSize); // still no avx512
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
         {
@@ -79,7 +79,7 @@ void JincResize::KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, 
         //int64_t tidx = omp_get_thread_num();
         float* pfInpRowSamplesFloatBufStart = pfInpFloatRow; // +tidx * iWidthEl;
 //        (this->*GetInpElRowAsFloat)(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart);
-        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart); // still no avx512
+        GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart, iKernelSize); // still no avx512
 
         for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
         {
@@ -158,7 +158,7 @@ void JincResize::KernelRowAll_avx512_mul_cb_mt(unsigned char* src, int iSrcStrid
         for (int64_t row = iStartRow; row < iEndRow; row++)
         {
             float* pfInpRowSamplesFloatBufStart = pfInpFloatRow + tidx * iWidthEl;
-            GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart); // still no avx512
+            GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart, iKernelSize); // still no avx512
 
             for (int64_t col = iTaps; col < iWidthEl - iTaps; col++) // input cols counter
             {
@@ -276,31 +276,31 @@ __forceinline void JincResize::ConvertiMulRowsToInt_avx2(std::vector<float*>Vect
     } // row
 }
 
-__forceinline void JincResize::GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst)
+__forceinline void JincResize::GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst, const int ciKS)
 {
     int64_t col;
 
-    const int64_t col8 = iKernelSize - iKernelSize % 8;
+    const int64_t col8 = ciKS - ciKS % 8;
     // row range from iTaps to iHeightEl - iTaps - 1
     // use iWidthEl and iHeightEl set in KernelRow()
 
-    if (iInpRow < iKernelSize) iInpRow = iKernelSize;
-    if (iInpRow > (iCurrInpHeight + iKernelSize - 1)) iInpRow = iCurrInpHeight + iKernelSize - 1;
+    if (iInpRow < ciKS) iInpRow = ciKS;
+    if (iInpRow > (iCurrInpHeight + ciKS - 1)) iInpRow = iCurrInpHeight + ciKS - 1;
 
-    unsigned char* pCurrRowSrc = pCurr_src + (iInpRow - iKernelSize) * iCurrSrcStride;
+    unsigned char* pCurrRowSrc = pCurr_src + (iInpRow - ciKS) * iCurrSrcStride;
 
     // start cols
     __m256 my_ymm_start = _mm256_setzero_ps();
     my_ymm_start = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm_start), *pCurrRowSrc));
 
-    for (col = iKernelSize - 8; col >= 0; col -= 8) // left
+    for (col = ciKS - 8; col >= 0; col -= 8) // left
     {
         _mm256_store_ps(dst + col, my_ymm_start);
     }
 
     // mid cols
     unsigned char* pCurrColSrc = pCurrRowSrc;
-    for (col = iKernelSize; col < iKernelSize + iCurrInpWidth; col += 8)
+    for (col = ciKS; col < ciKS + iCurrInpWidth; col += 8)
     {
         __m256 src_ps = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadu_si128((__m128i*)pCurrColSrc)));
         _mm256_store_ps(dst + col, src_ps);
@@ -310,10 +310,11 @@ __forceinline void JincResize::GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInp
     // end cols
     __m256 my_ymm_end = _mm256_setzero_ps();
     my_ymm_end = _mm256_broadcastss_ps(_mm_cvt_si2ss(_mm256_castps256_ps128(my_ymm_start), pCurrRowSrc[iCurrInpWidth - 1]));
-    for (col = iKernelSize + iCurrInpWidth; col < iWidthEl; col += 8) // right
+    for (col = ciKS + iCurrInpWidth; col < (2 * ciKS + iCurrInpWidth); col += 8) // right
     {
         _mm256_store_ps(dst + col, my_ymm_end);
     }
 
 }
+
 #endif
