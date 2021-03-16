@@ -310,6 +310,139 @@ void JincResize::KernelRowAll_avx2_mul_cb_mt(unsigned char* src, int iSrcStride,
     } // parallel section
 }
 
+void JincResize::KernelRowAll_avx2_mul_cb_mt_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS)
+{
+    // current input plane sizes
+    iWidthEl = iInpWidth + 2 * ciKS;
+    iHeightEl = iInpHeight + 2 * ciKS;
+
+    const int k_col8 = ciKS - (ciKS % 8);
+
+    const int64_t iNumRowsPerThread = (iHeightEl - 2 * ciTaps) / threads_;
+
+    // initial clearing
+    for (int j = 0; j < threads_; j++)
+    {
+        for (int i = 0; i < ciKS + ciMul * 1; i++) //  (iNumSimProcRows - 1) = 1
+        {
+            memset(vpvThreadsVectors[j][i], 0, iWidthEl * ciMul * sizeof(float));
+        }
+    }
+
+#pragma omp parallel num_threads(threads_)
+    {
+        // start all thread dependent ptrs here
+        int64_t tidx = omp_get_thread_num(); // our thread id here
+        float* pfFullCurrKernel = g_pfKernel; // local copy
+
+        std::vector<float*> vpfThreadVector = vpvThreadsVectors[tidx];
+        // it looks vpfThreadVector uses copy of vector from vpvThreadsVectors and it may be slower, TO DO - remake to pointer to vector
+
+        // calculate rows to process in this thread
+        int64_t iStartRow = tidx * iNumRowsPerThread;
+        int64_t iThreadSkipRows = ciTaps * 2;
+        // some check
+        if (iStartRow < ciTaps) iStartRow = ciTaps;
+        int64_t iEndRow = iStartRow + iNumRowsPerThread + 2 * ciTaps;
+        if (iEndRow > iHeightEl - ciTaps) iEndRow = iHeightEl - ciTaps;
+
+        for (int64_t row = iStartRow; row < iEndRow; row+=2)
+        {
+            // start all row-only dependent ptrs here
+
+            // prepare float32 pre-converted row data for each threal separately
+            float* pfInpRowSamplesFloatBufStart_r1 = pfInpFloatRow + tidx * (2 * iWidthEl);
+            float* pfInpRowSamplesFloatBufStart_r2 = pfInpFloatRow + tidx * (2 * iWidthEl) + iWidthEl;
+            GetInpElRowAsFloat_avx2(row, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart_r1, ciKS);
+            GetInpElRowAsFloat_avx2(row + 1, iInpHeight, iInpWidth, src, iSrcStride, pfInpRowSamplesFloatBufStart_r2, ciKS);
+
+            for (int64_t col = ciTaps; col < iWidthEl - ciTaps; col++) // input cols counter
+            {
+                float* pfCurrKernel_pos1 = pfFullCurrKernel;
+                float* pfCurrKernel_pos2 = pfFullCurrKernel;
+                float* pfProc;
+
+                for (int64_t k_row = 0; k_row < ciMul; k_row++) // r1 only proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+#pragma unroll(2)
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += (pfCurrKernel_pos1[k_col] * pfInpRowSamplesFloatBufStart_r1[col]);
+                    }
+                    pfCurrKernel_pos1 += ciKS; // point to next kernel row now
+                } // k_row
+
+                for (int64_t k_row = ciMul; k_row < ciKS; k_row++) // r1  and r2 proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+#pragma unroll(2)
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        __m256 my_tmp = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                        //                  *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                        //                  *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), *(__m256*)(pfProc + k_col));
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), my_tmp);
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += ((pfCurrKernel_pos1[k_col] * pfInpRowSamplesFloatBufStart_r1[col]) + (pfCurrKernel_pos2[k_col] * pfInpRowSamplesFloatBufStart_r2[col]));
+                    }
+                    pfCurrKernel_pos1 += ciKS; // point to next kernel row now
+                    pfCurrKernel_pos2 += ciKS; // point to next kernel row now
+                } // k_row
+#pragma unroll(2)
+                for (int64_t k_row = ciKS; k_row < ciKS + ciMul; k_row++) // r2 proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), *(__m256*)(pfProc + k_col));
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += (pfCurrKernel_pos2[k_col] * pfInpRowSamplesFloatBufStart_r2[col]);
+                    }
+                    pfCurrKernel_pos2 += ciKS; // point to next kernel row now
+                } // k_row
+
+            } // col
+
+            int iOutStartRow = (row - (ciTaps + ciKS)) * ciMul;
+            //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
+            if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*ciMul && iThreadSkipRows <= 0)
+            {
+                if ((iOutStartRow + ciMul * 2) < (iInpHeight)*ciMul)
+                    // it looks vpfThreadVector uses copy of vector and it may be slower, TO DO - remake to pointer to vector
+                    ConvertNRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, ciMul * 2);
+                else
+                    ConvertNRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, ciMul);
+            }
+
+            iThreadSkipRows -= 2;
+
+            // circulate pointers to iMul rows upper
+            std::rotate(vpfThreadVector.begin(), vpfThreadVector.begin() + ciMul * 2, vpfThreadVector.end());
+
+            // clear last iMul * 2 rows
+            for (int i = ciKS - ciMul; i < ciKS + ciMul; i++)
+            {
+                memset(vpfThreadVector[i], 0, iWidthEl * ciMul * sizeof(float));
+            }
+        } // row
+    } // parallel section
+}
+
 void JincResize::KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS)
 {
 
@@ -1221,22 +1354,25 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
 
     const int k_col8 = ciKS - (ciKS % 8);
     const int col8 = iWidthEl - ciTaps - ((iWidthEl - ciTaps) % 8);
-    float* pfCurrKernel = g_pfKernel;
 
     const int64_t iNumRowsPerThread = (iHeightEl - 2 * ciTaps) / threads_;
 
     // initial clearing
     for (int j = 0; j < threads_; j++)
     {
-        for (int i = 0; i < ciKS + ciMul; i++)
+        for (int i = 0; i < ciKS + ciMul * 1; i++) //  (iNumSimProcRows - 1) = 1
         {
             memset(vpvThreadsVectors[j][i], 0, iWidthEl * ciMul * sizeof(float));
         }
     }
 
 #pragma omp parallel num_threads(threads_)
+//#pragma omp parallel num_threads(1)
     {
         int64_t tidx = omp_get_thread_num(); // our thread id here
+        unsigned char ucKRowsNums[32] = { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0 };
+        float* pfQCurrKernel = g_pfQuaterKernel; //g_pfKernel; finally save about 3kB of L1D cache
+        float* pfFullCurrKernel = g_pfKernel; //local copy
 
         std::vector<float*> vpfThreadVector = vpvThreadsVectors[tidx];
         // it looks vpfThreadVector uses copy of vector from vpvThreadsVectors and it may be slower, TO DO - remake to pointer to vector
@@ -1265,9 +1401,6 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
                 float* pfColStart1 = pfInpRowSamplesFloatBufStart_r1 + col;
                 float* pfColStart2 = pfInpRowSamplesFloatBufStart_r2 + col;
 
-                float* pfCurrKernel_pos1 = pfCurrKernel;
-                float* pfCurrKernel_pos2 = pfCurrKernel;
-
                 __m256 my_ymm0, my_ymm1, my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
                 __m256 my_ymm8, my_ymm9, my_ymm10, my_ymm11; // inp samples
                 __m256 my_ymm12, my_ymm13, my_ymm14, my_ymm15; // kernel samples
@@ -1276,11 +1409,18 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
                 for (int64_t k_row = 0; k_row < 4/*ciMul*/; k_row++) // 1st row only proc, iMul=4
                 {
                     float* pfProc = vpfThreadVector[k_row] + col * ciMul; // *iMul
+                    float* pfCurrKernel_pos1 = pfQCurrKernel + 16 * ucKRowsNums[k_row]; // iKernelSize / 2
 
                     my_ymm12 = _mm256_load_ps(pfCurrKernel_pos1);
                     my_ymm13 = _mm256_load_ps(pfCurrKernel_pos1 + 8);
-                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
-                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+
+//                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
+//                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+                    // mirror my_ymm12 and my_ymm13 to my_ymm14 and my_ymm15 - 13 to 14 and 12 to 15
+                    my_ymm15 = _mm256_shuffle_ps(my_ymm12, my_ymm12, 0x1B);
+                    my_ymm14 = _mm256_shuffle_ps(my_ymm13, my_ymm13, 0x1B);
+                    my_ymm15 = _mm256_permute2f128_ps(my_ymm15, my_ymm15, 1);
+                    my_ymm14 = _mm256_permute2f128_ps(my_ymm14, my_ymm14, 1);
 
                     my_ymm0 = _mm256_load_ps(pfProc);
                     my_ymm1 = _mm256_load_ps(pfProc + 8);
@@ -1369,20 +1509,25 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
                     _mm256_store_ps(pfProc + 44, my_ymm5);
                     _mm256_store_ps(pfProc + 52, my_ymm6);
 
-                    pfCurrKernel_pos1 += 32/*ciKS*/;// point to next kernel row now, +iKS
                 } // k_row
 
 #pragma unroll (2)
                 for (int64_t k_row = 4/*ciMul*/; k_row < 32/*ciKS*/; k_row++) // 1st and 2nd rows proc, iMul to iKS
                 {
                     float* pfProc = vpfThreadVector[k_row] + col * 4/*ciMul*/; // *iMul
+                    float* pfCurrKernel_pos1 = pfQCurrKernel + 16 * ucKRowsNums[k_row]; // iKernelSize / 2
+                    float* pfCurrKernel_pos2 = pfQCurrKernel + 16 * ucKRowsNums[k_row - 4]; // iKernelSize / 2 , -iTaps
 
                     // 1st row
 
                     my_ymm12 = _mm256_load_ps(pfCurrKernel_pos1);
                     my_ymm13 = _mm256_load_ps(pfCurrKernel_pos1 + 8);
-                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
-                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+//                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
+//                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+                    my_ymm15 = _mm256_shuffle_ps(my_ymm12, my_ymm12, 0x1B);
+                    my_ymm14 = _mm256_shuffle_ps(my_ymm13, my_ymm13, 0x1B);
+                    my_ymm15 = _mm256_permute2f128_ps(my_ymm15, my_ymm15, 1);
+                    my_ymm14 = _mm256_permute2f128_ps(my_ymm14, my_ymm14, 1);
 
                     my_ymm0 = _mm256_load_ps(pfProc);
                     my_ymm1 = _mm256_load_ps(pfProc + 8);
@@ -1425,8 +1570,12 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
 
                     my_ymm12 = _mm256_load_ps(pfCurrKernel_pos2);
                     my_ymm13 = _mm256_load_ps(pfCurrKernel_pos2 + 8);
-                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos2 + 16);
-                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos2 + 24);
+//                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos2 + 16);
+//                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos2 + 24);
+                    my_ymm15 = _mm256_shuffle_ps(my_ymm12, my_ymm12, 0x1B);
+                    my_ymm14 = _mm256_shuffle_ps(my_ymm13, my_ymm13, 0x1B);
+                    my_ymm15 = _mm256_permute2f128_ps(my_ymm15, my_ymm15, 1);
+                    my_ymm14 = _mm256_permute2f128_ps(my_ymm14, my_ymm14, 1);
 
                     my_ymm8 = _mm256_broadcast_ss(pfColStart2 + 0); // 1
                     my_ymm9 = _mm256_broadcast_ss(pfColStart2 + 2); // 3
@@ -1503,8 +1652,12 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
 
                     my_ymm12 = _mm256_load_ps(pfCurrKernel_pos1);
                     my_ymm13 = _mm256_load_ps(pfCurrKernel_pos1 + 8);
-                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
-                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+//                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos1 + 16);
+//                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos1 + 24);
+                    my_ymm15 = _mm256_shuffle_ps(my_ymm12, my_ymm12, 0x1B);
+                    my_ymm14 = _mm256_shuffle_ps(my_ymm13, my_ymm13, 0x1B);
+                    my_ymm15 = _mm256_permute2f128_ps(my_ymm15, my_ymm15, 1);
+                    my_ymm14 = _mm256_permute2f128_ps(my_ymm14, my_ymm14, 1);
 
                     // even samples
                     my_ymm8 = _mm256_broadcast_ss(pfColStart1 + 1); // 2
@@ -1545,21 +1698,24 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
                     _mm256_store_ps(pfProc + 44, my_ymm5);
                     _mm256_store_ps(pfProc + 52, my_ymm6);
 
-                    pfCurrKernel_pos1 += 32/*ciKS*/;// point to next kernel row now
-                    pfCurrKernel_pos2 += 32/*ciKS*/;// point to next kernel row now
                 } // k_row
 
 #pragma unroll (2)
                 for (int64_t k_row = 32/*ciKS*/; k_row < 36/*ciKS + ciMul*/; k_row++) // 2nd row only proc, iKS to iKS+iMul
                 {
                     float* pfProc = vpfThreadVector[k_row] + col * 4/*ciMul*/; // *iMul
+                    float* pfCurrKernel_pos2 = pfQCurrKernel + 16 * ucKRowsNums[k_row - 4]; // iKernelSize / 2 , -iTaps
 
                     // 2nd row
 
                     my_ymm12 = _mm256_load_ps(pfCurrKernel_pos2);
                     my_ymm13 = _mm256_load_ps(pfCurrKernel_pos2 + 8);
-                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos2 + 16);
-                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos2 + 24);
+//                    my_ymm14 = _mm256_load_ps(pfCurrKernel_pos2 + 16);
+//                    my_ymm15 = _mm256_load_ps(pfCurrKernel_pos2 + 24);
+                    my_ymm15 = _mm256_shuffle_ps(my_ymm12, my_ymm12, 0x1B);
+                    my_ymm14 = _mm256_shuffle_ps(my_ymm13, my_ymm13, 0x1B);
+                    my_ymm15 = _mm256_permute2f128_ps(my_ymm15, my_ymm15, 1);
+                    my_ymm14 = _mm256_permute2f128_ps(my_ymm14, my_ymm14, 1);
 
                     my_ymm0 = _mm256_load_ps(pfProc);
                     my_ymm1 = _mm256_load_ps(pfProc + 8);
@@ -1648,45 +1804,84 @@ void JincResize::KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int i
                     _mm256_store_ps(pfProc + 44, my_ymm5);
                     _mm256_store_ps(pfProc + 52, my_ymm6);
 
-                    pfCurrKernel_pos2 += 32/*ciKS*/;// point to next kernel row now, +iKS
-                } // k_row
-
-            } // col 
-              /*
-            // need to process last up to 7 cols separately...
-            for (col = col8 + iTaps; col < iWidthEl - iTaps; col++) // input cols counter
-            {
-                float* pfCurrKernel_pos = pfCurrKernel;
-                float* pfProc;
-
-                for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
-                {
-                    pfProc = vpfThreadVector[k_row] + col * iMul;
-                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
-                    {
-                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart[col]), *(__m256*)(pfProc + k_col));
-                    }
-
-                    // need to process last (up to 7) floats separately..
-                    for (int64_t k_col = k_col8; k_col < iKernelSize; ++k_col)
-                    {
-                        pfProc[k_col] += (pfCurrKernel_pos[k_col] * pfInpRowSamplesFloatBufStart[col]);
-                    }
-                    pfCurrKernel_pos += iKernelSize; // point to next kernel row now
                 } // k_row
 
             } // col
-            */
+            
+            for (int64_t col = col8 + ciTaps; col < iWidthEl - ciTaps; col++) // input cols counter
+            {
+                float* pfCurrKernel_pos1 = pfFullCurrKernel;
+                float* pfCurrKernel_pos2 = pfFullCurrKernel;
+                float* pfProc;
+
+                for (int64_t k_row = 0; k_row < ciMul; k_row++) // r1 only proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+#pragma unroll(2)
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += (pfCurrKernel_pos1[k_col] * pfInpRowSamplesFloatBufStart_r1[col]);
+                    }
+                    pfCurrKernel_pos1 += ciKS; // point to next kernel row now
+                } // k_row
+
+                for (int64_t k_row = ciMul; k_row < ciKS; k_row++) // r1  and r2 proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+#pragma unroll(2)
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        __m256 my_tmp = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                        //                  *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos1 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r1[col]), *(__m256*)(pfProc + k_col));
+                        //                  *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), *(__m256*)(pfProc + k_col));
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), my_tmp);
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += ((pfCurrKernel_pos1[k_col] * pfInpRowSamplesFloatBufStart_r1[col]) + (pfCurrKernel_pos2[k_col] * pfInpRowSamplesFloatBufStart_r2[col]));
+                    }
+                    pfCurrKernel_pos1 += ciKS; // point to next kernel row now
+                    pfCurrKernel_pos2 += ciKS; // point to next kernel row now
+                } // k_row
+#pragma unroll(2)
+                for (int64_t k_row = ciKS; k_row < ciKS + ciMul; k_row++) // r2 proc
+                {
+                    pfProc = vpfThreadVector[k_row] + col * ciMul;
+                    for (int64_t k_col = 0; k_col < k_col8; k_col += 8)
+                    {
+                        *(__m256*)(pfProc + k_col) = _mm256_fmadd_ps(*(__m256*)(pfCurrKernel_pos2 + k_col), _mm256_broadcast_ss(&pfInpRowSamplesFloatBufStart_r2[col]), *(__m256*)(pfProc + k_col));
+                    }
+
+                    // need to process last (up to 7) floats separately..
+                    for (int64_t k_col = k_col8; k_col < ciKS; ++k_col)
+                    {
+                        pfProc[k_col] += (pfCurrKernel_pos2[k_col] * pfInpRowSamplesFloatBufStart_r2[col]);
+                    }
+                    pfCurrKernel_pos2 += ciKS; // point to next kernel row now
+                } // k_row
+
+            } // col
+            
             int iOutStartRow = (row - (ciTaps + ciKS)) * ciMul;
             //iMul rows ready - output result, skip iKernelSize+iTaps rows from beginning
             if (iOutStartRow >= 0 && iOutStartRow < (iInpHeight)*ciMul && iThreadSkipRows <= 0)
             {
+                if ((iOutStartRow + ciMul * 2) < (iInpHeight) * ciMul)
                 // it looks vpfThreadVector uses copy of vector and it may be slower, TO DO - remake to pointer to vector
-             //   ConvertiMulRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride);
-                ConvertNRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, ciMul * 2);
+                    ConvertNRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, ciMul * 2);
+                else
+                    ConvertNRowsToInt_avx2(vpfThreadVector, iInpWidth, iOutStartRow, dst, iDstStride, ciMul);
             }
 
-            iThreadSkipRows--;
+            iThreadSkipRows-=2;
 
             // circulate pointers to iMul rows upper
             std::rotate(vpfThreadVector.begin(), vpfThreadVector.begin() + ciMul * 2, vpfThreadVector.end());
@@ -1736,11 +1931,11 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStr
 			for (int64_t k_row = 0; k_row < iKernelSize; k_row++)
 			{
                 float* pfProc = vpfRowsPointers[k_row] + col * 2/*iMul*/;
-                float* pfCurrKernel_pos = pfCurrKernel + 8 * ucKRowsNums[k_row]; // iKernelSize / 2
+                float* pfCurrKernel_pos = pfCurrKernel + 8 * (int64_t)ucKRowsNums[k_row]; // iKernelSize / 2
 
 				register __m256 my_ymm0, my_ymm1; // kernel samples
                 register __m256 my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
-				const register __m256i my_ymm8_main_circ = _mm256_set_epi32(1, 0, 7, 6, 5, 4, 3, 2); // main circulating cosst
+//				const register __m256i my_ymm8_main_circ = _mm256_set_epi32(1, 0, 7, 6, 5, 4, 3, 2); // main circulating cosst
                 register __m256i my_imm_perm; // to temp ymm
                 register __m256 my_ymm9, my_ymm10, my_ymm11, my_ymm12, my_ymm13; // inp samples
                 register __m256 my_ymm15; //  temp
@@ -1790,26 +1985,26 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStr
 
 				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 01 [out_01;in8_23;in8_45;in8_01]
 
-				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+                my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
 				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+                my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
 				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+                my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
 				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+                my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
 				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+                my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
 				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
-																  // load next hi 2 ps from temp
+				// load next hi 2 ps from temp
 				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_01;in8_45;in8_23;xx]
 
-																   // next samples
+			    // next samples
 				my_ymm9 = _mm256_broadcast_ss(pfColStart + 1); // 2
 				my_ymm10 = _mm256_broadcast_ss(pfColStart + 5); // 6
 				my_ymm11 = _mm256_broadcast_ss(pfColStart + 9); // 10
@@ -1841,21 +2036,21 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStr
 
 				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 23 [out_23;in8_45;out_01;in8_23]
 
-				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
+                my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
+                my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
+                my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
+                my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
+                my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
+                my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
+                my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
+                my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
+                my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
+                my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
 				// load next hi 2 ps from temp
 				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_23;in8_45;out_01;xx]
@@ -1892,21 +2087,21 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStr
 
 				my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out45 [out_45;out_23;out_01;in8_45]
 
-				my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
+                my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
+                my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-				my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
+                my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
+                my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-				my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
+                my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
+                my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-				my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
+                my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
+                my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-				my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
-				my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
+                my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
+                my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
 				my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_45;out_23;out_01;xx]
 
@@ -2050,11 +2245,11 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb_mt(unsigned char* src, int iSrc
                 for (int64_t k_row = 0; k_row < 16/*iKernelSize*/; k_row++)
                 {
                     float* pfProc = vpfThreadVector[k_row] + col * 2/*iMul*/;
-                    float* pfCurrKernel_pos = pfQCurrKernel + 8 * ucKRowsNums[k_row]; // iKernelSize / 2
+                    float* pfCurrKernel_pos = pfQCurrKernel + 8 * (int64_t)ucKRowsNums[k_row]; // iKernelSize / 2
 
                     register __m256 my_ymm0, my_ymm1; // kernel samples
                     register __m256 my_ymm2, my_ymm3, my_ymm4, my_ymm5, my_ymm6, my_ymm7; // out samples
-                    const register __m256i my_ymm8_main_circ = _mm256_set_epi32(1, 0, 7, 6, 5, 4, 3, 2); // main circulating cosst
+//                    const register __m256i my_ymm8_main_circ = _mm256_set_epi32(1, 0, 7, 6, 5, 4, 3, 2); // main circulating cosst
                     register __m256i my_imm_perm; // to temp ymm
                     register __m256 my_ymm9, my_ymm10, my_ymm11, my_ymm12, my_ymm13; // inp samples
                     register __m256 my_ymm15; //  temp
@@ -2104,26 +2299,26 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb_mt(unsigned char* src, int iSrc
 
                     my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 01 [out_01;in8_23;in8_45;in8_01]
 
-                    my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-                    my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                    my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
                     my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-                    my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
                     my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-                    my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
                     my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-                    my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
                     my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-                    my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
                     my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
-                                                                      // load next hi 2 ps from temp
+                    // load next hi 2 ps from temp
                     my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_01;in8_45;in8_23;xx]
 
-                                                                       // next samples
+                    // next samples
                     my_ymm9 = _mm256_broadcast_ss(pfColStart + 1); // 2
                     my_ymm10 = _mm256_broadcast_ss(pfColStart + 5); // 6
                     my_ymm11 = _mm256_broadcast_ss(pfColStart + 9); // 10
@@ -2155,20 +2350,20 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb_mt(unsigned char* src, int iSrc
 
                     my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out 23 [out_23;in8_45;out_01;in8_23]
 
-                    my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-                    my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                    my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
                     my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-                    my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
                     my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-                    my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
                     my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-                    my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
                     my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-                    my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
                     my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
                     // load next hi 2 ps from temp
@@ -2206,20 +2401,20 @@ void JincResize::KernelRowAll_avx2_mul2_taps4_cb_mt(unsigned char* src, int iSrc
 
                     my_ymm15 = _mm256_blend_ps(my_ymm15, my_ymm2, 3); // store out45 [out_45;out_23;out_01;in8_45]
 
-                    my_ymm2 = _mm256_permutevar8x32_ps(my_ymm2, my_ymm8_main_circ); // circulate by 2 ps to the left
-                    my_ymm3 = _mm256_permutevar8x32_ps(my_ymm3, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm2 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm2), 57)); // circulate by 2 ps to the left
+                    my_ymm3 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm3), 57));// circulate by 2 ps to the left
                     my_ymm2 = _mm256_blend_ps(my_ymm2, my_ymm3, 192); // copy higher 2 floats
 
-                    my_ymm4 = _mm256_permutevar8x32_ps(my_ymm4, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm4 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm4), 57));// circulate by 2 ps to the left
                     my_ymm3 = _mm256_blend_ps(my_ymm3, my_ymm4, 192); // copy higher 2 floats
 
-                    my_ymm5 = _mm256_permutevar8x32_ps(my_ymm5, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm5 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm5), 57));// circulate by 2 ps to the left
                     my_ymm4 = _mm256_blend_ps(my_ymm4, my_ymm5, 192); // copy higher 2 floats
 
-                    my_ymm6 = _mm256_permutevar8x32_ps(my_ymm6, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm6 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm6), 57));// circulate by 2 ps to the left
                     my_ymm5 = _mm256_blend_ps(my_ymm5, my_ymm6, 192); // copy higher 2 floats
 
-                    my_ymm7 = _mm256_permutevar8x32_ps(my_ymm7, my_ymm8_main_circ); // circulate by 2 ps to the left
+                    my_ymm7 = _mm256_castpd_ps(_mm256_permute4x64_pd(_mm256_castps_pd(my_ymm7), 57));// circulate by 2 ps to the left
                     my_ymm6 = _mm256_blend_ps(my_ymm6, my_ymm7, 192); // copy higher 2 floats
 
                     my_ymm7 = _mm256_blend_ps(my_ymm7, my_ymm15, 192); // copy higher 2 floats [out_45;out_23;out_01;xx]
