@@ -100,10 +100,10 @@ class JincResize : public GenericVideoFilter
 	void KernelRowAll_c_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
     void KernelRowAll_c_mul_cb_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 	void KernelRowAll_c_mul_cb_mt(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
+    void KernelRowAll_c_mul_cb_mt_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 	void KernelRowAll_c_mul_cb_is(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_c_mul_cb_frw(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_c_mul_cb_nz(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
- //   void KernelRowAll_c_mul_cb_mt_nvs(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
 
 	void KernelRowAll_sse2_mul(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
 	void KernelRowAll_sse2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride);
@@ -115,13 +115,14 @@ class JincResize : public GenericVideoFilter
 	void KernelRowAll_avx2_mul_cb(unsigned char *src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char *dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul_cb_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
+    void KernelRowAll_avx2_mul_cb_mt_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul4_taps4_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul4_taps4_cb_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul4_taps4_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
- //   void KernelRowAll_avx2_mul4_taps4_cb_mt_nvs(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul4_taps4_cb_mt_2r(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul2_taps4_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
     void KernelRowAll_avx2_mul2_taps4_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
+    void KernelRowAll_avx2_mul3_taps4_cb_mt(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride, const int ciMul, const int ciTaps, const int ciKS);
 
     void KernelRowAll_avx512_mul(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
     void KernelRowAll_avx512_mul_cb(unsigned char* src, int iSrcStride, int iInpWidth, int iInpHeight, unsigned char* dst, int iDstStride);
@@ -136,12 +137,10 @@ class JincResize : public GenericVideoFilter
 	void ConvertiMulRowsToInt_sse2(std::vector<float*>Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
 	void ConvertiMulRowsToInt_avx2(std::vector<float*>Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride);
     void ConvertNRowsToInt_avx2(std::vector<float*>const& Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride, int iNumRows);
- //   void ConvertNRowsNColsToInt_avx2(std::vector<float*>const& Vector, int iInpWidth, int iOutStartRow, unsigned char* dst, int iDstStride, int iNumRows, const int iColStart, const int iNumCols, const int iDstWidth);
-
+ 
 	void GetInpElRowAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
     void GetInpElNColsAsFloat_c(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst, int iColStart, int iNumCols);
     void GetInpElRowAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst, const int ciKS);
-//    void GetInpElNColsAsFloat_avx2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst, const int ciKS, int iColStart, int iNumCols);
 	void GetInpElRowAsFloat_sse2(int iInpRow, int iCurrInpHeight, int iCurrInpWidth, unsigned char* pCurr_src, int iCurrSrcStride, float* dst);
 
 
