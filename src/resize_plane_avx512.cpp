@@ -52,9 +52,7 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
                     const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
                     __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
                     hsum = _mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum));
-                    const __m128i src_int = _mm_packus_epi16(_mm_packs_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()), _mm_setzero_si128());
-                    _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
-
+                    dstp[x] = _mm_cvtsi128_si32(_mm_packus_epi16(_mm_packus_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()), _mm_setzero_si128()));
                 }
                 else if constexpr (std::is_same_v<T, uint16_t>)
                 {
@@ -74,9 +72,7 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
                     const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
                     __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
                     hsum = _mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum));
-                    const __m128i src_int = _mm_packus_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128());
-                    _mm_storeu_si128(reinterpret_cast<__m128i*>(dstp + x), src_int);
-
+                    dstp[x] = _mm_cvtsi128_si32(_mm_packus_epi32(_mm_cvtps_epi32(hsum), _mm_setzero_si128()));
                 }
                 else
                 {
@@ -96,7 +92,6 @@ void JincResize::resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, 
                     const __m256 lo_hi_256 = _mm256_add_ps(_mm512_castps512_ps256(result), _mm256_castpd_ps(_mm512_extractf64x4_pd(_mm512_castps_pd(result), 1)));
                     __m128 hsum = _mm_add_ps(_mm256_castps256_ps128(lo_hi_256), _mm256_extractf128_ps(lo_hi_256, 1));
                     dstp[x] = _mm_cvtss_f32(_mm_hadd_ps(_mm_hadd_ps(hsum, hsum), _mm_hadd_ps(hsum, hsum)));
-
                 }
             }
         }
