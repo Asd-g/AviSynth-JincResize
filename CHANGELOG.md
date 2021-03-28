@@ -1,3 +1,6 @@
+##### 2.0.2:
+     Fixed output for SIMD and threads > 1
+
 ##### 2.0.1:
     Used MSVC instead Intel C++ for faster binaries.
 
