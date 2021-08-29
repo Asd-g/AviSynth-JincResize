@@ -1,7 +1,8 @@
 #ifndef __JINCRESIZE_H__
 #define __JINCRESIZE_H__
 
-#include <immintrin.h>
+#include <string>
+#include <execution>
 
 #include "avisynth.h"
 #include "avs/minmax.h"
@@ -35,25 +36,25 @@ public:
 class JincResize : public GenericVideoFilter
 {
     Lut* init_lut;
-    EWAPixelCoeff* out[3]{};
+    EWAPixelCoeff* out[3];
     int planecount;
     bool has_at_least_v8;
     float peak;
-    int threads_;
 
-    template<typename T>
-    void resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T>
-    void resize_plane_sse41(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T>
-    void resize_plane_avx2(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T>
-    void resize_plane_avx512(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template<typename T, int thr>
+    void resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T, int thr>
+    void resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T, int thr>
+    void resize_plane_avx2(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    template <typename T, int thr>
+    void resize_plane_avx512(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
 
-    void(JincResize::*process_frame)(EWAPixelCoeff**, PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
+    void(JincResize::*process_frame)(PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
 public:
-    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env);
+    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
+        std::string cplace, int threads, int opt, IScriptEnvironment* env);
     PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
     int __stdcall SetCacheHints(int cachehints, int frame_range)
     {

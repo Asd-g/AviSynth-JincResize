@@ -1,3 +1,7 @@
+##### 2.1.0:
+     Added parameter cplace.
+     Changed omp parallel execution to C++17 parallel execution (better speed).
+
 ##### 2.0.2:
      Fixed output for SIMD and threads > 1
 

@@ -1,16 +1,39 @@
 #include <vector>
 #include <cmath>
-#include <thread>
-#include <string>
 
 #include "JincRessize.h"
 
+AVS_FORCEINLINE void* aligned_malloc(size_t size, size_t align)
+{
+    void* result = [&]() {
+#ifdef _MSC_VER 
+        return _aligned_malloc(size, align);
+#else 
+        if (posix_memalign(&result, align, size))
+            return result = nullptr;
+        else
+            return result;
+#endif
+    }();
+
+    return result;
+}
+
+AVS_FORCEINLINE void aligned_free(void* ptr)
+{
+#ifdef _MSC_VER 
+    _aligned_free(ptr);
+#else 
+    free(ptr);
+#endif
+}
+
 #ifndef M_PI // GCC seems to have it
-constexpr double M_PI = 3.14159265358979323846;
+static constexpr double M_PI = 3.14159265358979323846;
 #endif
 
 // Taylor series coefficients of 2*BesselJ1(pi*x)/(pi*x) as (x^2) -> 0
-static double jinc_taylor_series[31] =
+static constexpr double jinc_taylor_series[31] =
 {
      1.0,
     -1.23370055013616982735431137,
@@ -45,7 +68,7 @@ static double jinc_taylor_series[31] =
      2.68232117541264485328658605e-55
 };
 
-static double jinc_zeros[16] =
+static constexpr double jinc_zeros[16] =
 {
     1.2196698912665045,
     2.2331305943815286,
@@ -111,7 +134,7 @@ static double evaluate_rational(const double* num, const double* denom, double z
 //  LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 static double jinc_sqr_boost_l(double x2)
 {
-    static const double bPC[7] =
+    constexpr double bPC[7] =
     {
         -4.4357578167941278571e+06,
         -9.9422465050776411957e+06,
@@ -121,7 +144,7 @@ static double jinc_sqr_boost_l(double x2)
         -1.6116166443246101165e+03,
         0.0
     };
-    static const double bQC[7] =
+    constexpr double bQC[7] =
     {
         -4.4357578167941278568e+06,
         -9.9341243899345856590e+06,
@@ -131,7 +154,7 @@ static double jinc_sqr_boost_l(double x2)
         -1.4550094401904961825e+03,
         1.0
     };
-    static const double bPS[7] =
+    constexpr double bPS[7] =
     {
         3.3220913409857223519e+04,
         8.5145160675335701966e+04,
@@ -141,7 +164,7 @@ static double jinc_sqr_boost_l(double x2)
         3.5265133846636032186e+01,
         0.0
     };
-    static const double bQS[7] =
+    constexpr double bQS[7] =
     {
         7.0871281941028743574e+05,
         1.8194580422439972989e+06,
@@ -152,17 +175,13 @@ static double jinc_sqr_boost_l(double x2)
         1.0
     };
 
-    auto y2 = M_PI * M_PI * x2;
-    auto xp = sqrt(y2);
-    auto y2p = 64.0 / y2;
-    auto yp = 8.0 / xp;
-    auto factor = sqrt(xp / M_PI) * 2.0 / y2;
-    auto rc = evaluate_rational(bPC, bQC, y2p, 7);
-    auto rs = evaluate_rational(bPS, bQS, y2p, 7);
-    auto sx = sin(xp);
-    auto cx = cos(xp);
+    const auto y2 = M_PI * M_PI * x2;
+    const auto xp = sqrt(y2);
+    const auto y2p = 64.0 / y2;
+    const auto sx = sin(xp);
+    const auto cx = cos(xp);
 
-    return factor * (rc * (sx - cx) + yp * rs * (sx + cx));
+    return (sqrt(xp / M_PI) * 2.0 / y2) * (evaluate_rational(bPC, bQC, y2p, 7) * (sx - cx) + (8.0 / xp) * evaluate_rational(bPS, bQS, y2p, 7) * (sx + cx));
 }
 
 // jinc(sqrt(x2))
@@ -198,9 +217,9 @@ static double jinc_sqr(double x2)
     }
     else if (x2 < 52.57)  // the 5~7-tap radius
     {
-        auto x = M_PI * sqrt(x2);
-#if defined(GCC) || defined(CLANG)
-        return 2.0 * _j1(x) / x;
+        const auto x = M_PI * sqrt(x2);
+#if defined(GCC)
+        return 2.0 * __j1(x) / x;
 #else
         return 2.0 * std::cyl_bessel_j(1, x) / x;
 #endif
@@ -211,9 +230,9 @@ static double jinc_sqr(double x2)
     }
     else                  // the 9~16-tap radius
     {
-        auto x = M_PI * sqrt(x2);
-#if defined(GCC) || defined(CLANG)
-        return 2.0 * _j1(x) / x;
+        const auto x = M_PI * sqrt(x2);
+#if defined(GCC)
+        return 2.0 * __j1(x) / x;
 #else
         return 2.0 * std::cyl_bessel_j(1, x) / x;
 #endif
@@ -240,15 +259,13 @@ Lut::Lut()
 
 void Lut::InitLut(int lut_size, double radius, double blur)
 {
-    auto radius2 = radius * radius;
-    auto blur2 = blur * blur;
+    const auto radius2 = radius * radius;
+    const auto blur2 = blur * blur;
 
     for (auto i = 0; i < lut_size; ++i)
     {
-        auto t2 = i / (lut_size - 1.0);
-        double filter = sample_sqr(jinc_sqr, radius2 * t2, blur2, radius2);
-        double window = sample_sqr(jinc_sqr, JINC_ZERO_SQR * t2, 1.0, radius2);
-        lut[i] = filter * window;
+        const auto t2 = i / (lut_size - 1.0);
+        lut[i] = sample_sqr(jinc_sqr, radius2 * t2, blur2, radius2) * sample_sqr(jinc_sqr, JINC_ZERO_SQR * t2, 1.0, radius2);
     }
 }
 
@@ -293,7 +310,7 @@ static void delete_coeff_table(EWAPixelCoeff* out)
     if (out == nullptr)
         return;
 
-    _aligned_free(out->factor);
+    aligned_free(out->factor);
     delete[] out->meta;
     delete[] out->factor_map;
 }
@@ -303,29 +320,22 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     int samples, int src_width, int src_height, int dst_width, int dst_height, double radius,
     double crop_left, double crop_top, double crop_width, double crop_height)
 {
-    const double filter_scale_x = static_cast<double>(dst_width) / crop_width;
-    const double filter_scale_y = static_cast<double>(dst_height) / crop_height;
-
-    const double filter_step_x = min(filter_scale_x, 1.0);
-    const double filter_step_y = min(filter_scale_y, 1.0);
+    const double filter_step_x = min(static_cast<double>(dst_width) / crop_width, 1.0);
+    const double filter_step_y = min(static_cast<double>(dst_height) / crop_height, 1.0);
 
     const float filter_support_x = static_cast<float>(radius / filter_step_x);
     const float filter_support_y = static_cast<float>(radius / filter_step_y);
 
-    const int filter_size_x = static_cast<int>(ceil(filter_support_x * 2.0));
-    const int filter_size_y = static_cast<int>(ceil(filter_support_y * 2.0));
-
     const float filter_support = max(filter_support_x, filter_support_y);
-    const int filter_size = max(filter_size_x, filter_size_y);
+    const int filter_size = max(static_cast<int>(ceil(filter_support_x * 2.0)), static_cast<int>(ceil(filter_support_y * 2.0)));
 
     const float start_x = static_cast<float>(crop_left + (crop_width - dst_width) / (dst_width * static_cast<int64_t>(2)));
-    const float start_y = static_cast<float>(crop_top + (crop_height - dst_height) / (dst_height * static_cast<int64_t>(2)));
 
     const float x_step = static_cast<float>(crop_width / dst_width);
     const float y_step = static_cast<float>(crop_height / dst_height);
 
     float xpos = start_x;
-    float ypos = start_y;
+    float ypos = static_cast<float>(crop_top + (crop_height - dst_height) / (dst_height * static_cast<int64_t>(2)));
 
     // Initialize EWAPixelCoeff data structure
     init_coeff_table(out, quantize_x, quantize_y, filter_size, dst_width, dst_height);
@@ -335,6 +345,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
     // Use to advance the coeff pointer
     const int coeff_per_pixel = out->coeff_stride * filter_size;
+
+    tmp_array.reserve(static_cast<int64_t>(dst_width) * dst_height * coeff_per_pixel);
 
     for (int y = 0; y < dst_height; ++y)
     {
@@ -397,8 +409,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
                 // This is the location of current target pixel in source pixel
                 // Quantized
-                const float current_x = clamp(is_border ? xpos : quantized_xpos, 0.f, src_width - 1.f);
-                const float current_y = clamp(is_border ? ypos : quantized_ypos, 0.f, src_height - 1.f);
+                //const float current_x = clamp(is_border ? xpos : quantized_xpos, 0.f, src_width - 1.f);
+                //const float current_y = clamp(is_border ? ypos : quantized_ypos, 0.f, src_height - 1.f);
 
                 if (!is_border)
                 {
@@ -421,11 +433,10 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
                     for (int lx = 0; lx < filter_size; ++lx)
                     {
                         // Euclidean distance to sampling pixel
-                        const float dx = static_cast<float>((current_x - window_x) * filter_step_x);
-                        const float dy = static_cast<float>((current_y - window_y) * filter_step_y);
-                        const float dist = dx * dx + dy * dy;
-                        double index_d = lround(static_cast<double>((samples - static_cast<int64_t>(1))) * dist / radius2) + DOUBLE_ROUND_MAGIC_NUMBER;
-                        int index = *reinterpret_cast<int*>(&index_d);
+                        const double dx = (clamp(is_border ? xpos : quantized_xpos, 0.f, src_width - 1.f) - window_x) * filter_step_x;
+                        const double dy = (clamp(is_border ? ypos : quantized_ypos, 0.f, src_height - 1.f) - window_y) * filter_step_y;
+
+                        int index = static_cast<int>(llround((samples - 1) * (dx * dx + dy * dy) / radius2 + DOUBLE_ROUND_MAGIC_NUMBER));
 
                         const float factor = func->GetFactor(index);
 
@@ -470,48 +481,46 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
     // Copy from tmp_array to real array
     const int tmp_array_size = tmp_array.size();
-    out->factor = static_cast<float*>(_aligned_malloc(tmp_array_size * sizeof(float), 64)); // aligned to cache line
+    out->factor = static_cast<float*>(aligned_malloc(tmp_array_size * sizeof(float), 64)); // aligned to cache line
     if (out->factor)
         memcpy(out->factor, &tmp_array[0], tmp_array_size * sizeof(float));
 }
 
 /* Planar resampling with coeff table */
-template<typename T>
-void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
+template<typename T, int thr>
+void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {
-    const int pixel_size = sizeof(T);
     const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
     const int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsYUV() || vi.IsYUVA()) ? planes_y : planes_r;
+    const int* current_planes = (vi.IsRGB()) ? planes_r : planes_y;
     for (int i = 0; i < planecount; ++i)
     {
         const int plane = current_planes[i];
 
-        const int src_stride = src->GetPitch(plane) / pixel_size;
-        const int dst_stride = dst->GetPitch(plane) / pixel_size;
-        const int dst_width = dst->GetRowSize(plane) / pixel_size;
+        const int src_stride = src->GetPitch(plane) / sizeof(T);
+        const int dst_stride = dst->GetPitch(plane) / sizeof(T);
+        const int dst_width = dst->GetRowSize(plane) / sizeof(T);
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
 
-#pragma omp parallel for num_threads(threads_)
-        for (int y = 0; y < dst_height; ++y)
+        auto loop = [&](int y)
         {
             T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
- 
+
             for (int x = 0; x < dst_width; ++x)
             {
-                EWAPixelCoeffMeta* meta = coeff[i]->meta + static_cast<int64_t>(y) * dst_width + x;
+                EWAPixelCoeffMeta* meta = out[i]->meta + static_cast<int64_t>(y) * dst_width + x;
                 const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
-                const float* coeff_ptr = coeff[i]->factor + meta->coeff_meta;
+                const float* coeff_ptr = out[i]->factor + meta->coeff_meta;
 
                 float result = 0.f;
 
-                for (int ly = 0; ly < coeff[i]->filter_size; ++ly)
+                for (int ly = 0; ly < out[i]->filter_size; ++ly)
                 {
-                    for (int lx = 0; lx < coeff[i]->filter_size; ++lx)
+                    for (int lx = 0; lx < out[i]->filter_size; ++lx)
                         result += src_ptr[lx] * coeff_ptr[lx];
 
-                    coeff_ptr += coeff[i]->coeff_stride;
+                    coeff_ptr += out[i]->coeff_stride;
                     src_ptr += src_stride;
                 }
 
@@ -521,12 +530,25 @@ void JincResize::resize_plane_c(EWAPixelCoeff* coeff[3], PVideoFrame& src, PVide
                     dstp[x] = result;
 
             }
+        };
+
+        if constexpr (thr)
+        {
+            for (intptr_t i = 0; i < dst_height; ++i)
+                loop(i);
+        }
+        else
+        {
+            std::vector<int> l(dst_height);
+            std::iota(std::begin(l), std::end(l), 0);
+            std::for_each(std::execution::par, std::begin(l), std::end(l), loop);
         }
     }
 }
 
-JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), threads_(threads)
+JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
+    std::string cplace, int threads, int opt, IScriptEnvironment* env)
+    : GenericVideoFilter(_child)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -536,6 +558,45 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: quant_x must be between 1..256.");
     if (quant_y < 1 || quant_y > 256)
         env->ThrowError("JincResize: quant_y must be between 1..256.");
+
+    has_at_least_v8 = true;
+    try { env->CheckVersion(8); }
+    catch (const AvisynthError&) { has_at_least_v8 = false; };
+
+    if (!cplace.empty())
+    {
+        for (auto& c : cplace)
+            c = tolower(c);
+
+        if (cplace != "mpeg2" && cplace != "mpeg1" && cplace != "topleft")
+            env->ThrowError("JincResize: cplace must be MPEG2, MPEG1 or topleft.");
+    }
+    else
+    {
+        if (has_at_least_v8)
+        {
+            PVideoFrame frame0 = child->GetFrame(0, env);
+            const AVSMap* props = env->getFramePropsRO(frame0);
+
+            if (env->propGetType(props, "_ChromaLocation") == 'i')
+            {
+                switch (env->propGetInt(props, "_ChromaLocation", 0, nullptr))
+                {
+                    case 0: cplace = "mpeg2"; break;
+                    case 1: cplace = "mpeg1"; break;
+                    case 2: cplace = "topleft"; break;
+                    default: env->ThrowError((std::string("JincResize: _ChromaLocation ") + std::to_string(env->propGetInt(props, "_ChromaLocation", 0, nullptr)) + " is not supported.").c_str()); break;
+                }
+            }
+            else
+                cplace = "mpeg2";
+        }
+        else
+            cplace = "mpeg2";
+    }
+
+    if (cplace == "topleft" && !vi.Is420())
+        env->ThrowError("JincResize: topleft must be used only for 4:2:0 chroma subsampling.");
     if (opt > 3)
         env->ThrowError("JincResize: opt higher than 3 is not allowed.");
     if (blur < 0.0 || blur > 10.0)
@@ -546,107 +607,141 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: opt=2 requires AVX2.");
     if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
         env->ThrowError("JincResize: opt=1 requires SSE4.1.");
-
-    const int thr = std::thread::hardware_concurrency();
-    if (threads_ == 0)
-        threads_ = thr;
-    else if (threads_ < 0 || threads_ > thr)
-    {
-        const std::string msg = "JincResize: threads must be between 0.." + std::to_string(thr) + ".";
-        env->ThrowError(msg.c_str());
-    }
-
-    has_at_least_v8 = true;
-    try { env->CheckVersion(8); }
-    catch (const AvisynthError&) { has_at_least_v8 = false; };
+    if (threads < 0 || threads > 1)
+        env->ThrowError("JincResize: threads must be either 0 or 1.");
 
     if (crop_width <= 0.0)
         crop_width = vi.width - crop_left + crop_width;
-
     if (crop_height <= 0.0)
         crop_height = vi.height - crop_top + crop_height;
 
-    int src_width = vi.width;
-    int src_height = vi.height;
+    const int src_width = vi.width;
+    const int src_height = vi.height;
     vi.width = target_width;
     vi.height = target_height;
     blur = 1.0 - blur / 100.0;
     peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
-    double radius = jinc_zeros[tap - 1];
-    int samples = 1024;  // should be a multiple of 4
+    const double radius = jinc_zeros[tap - 1];
+    constexpr int samples = 1024;  // should be a multiple of 4
     init_lut = new Lut();
-    init_lut->InitLut(samples, radius, blur);    
-    int sub_w, sub_h;
-    double div_w, div_h;
+    init_lut->InitLut(samples, radius, blur);
     planecount = min(vi.NumComponents(), 3);
 
-    if (planecount > 1 && (!vi.IsRGB() || !vi.Is444()))
+    if (planecount > 1)
     {
-        sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
-        sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
-        div_w = static_cast<double>(static_cast<int64_t>(1) << sub_w);
-        div_h = static_cast<double>(static_cast<int64_t>(1) << sub_h);
+        if (vi.Is444() || vi.IsRGB())
+        {
+            for (int i = 0; i < planecount; ++i)
+            {
+                out[i] = new EWAPixelCoeff();
+                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+            }
+        }
+        else
+        {
+            const int sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
+            const int sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
+            const double div_w = 1 << sub_w;
+            const double div_h = 1 << sub_h;
+
+            const double crop_left_uv = (cplace == "mpeg2" || cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_width) / target_width) + crop_left) / div_w : crop_left / div_w;
+            const double crop_top_uv = (cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
+
+            for (int i = 0; i < planecount; ++i)
+            {
+                out[i] = new EWAPixelCoeff();
+
+                if (i == 0)
+                    generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+                else
+                    generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                        target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
+            }
+        }
     }
     else
     {
-        sub_w = sub_h = 0;
-        div_w = div_h = 0.0;
-    }
-    
-    for (int i = 0; i < planecount; ++i)
-    {
-        out[i] = new EWAPixelCoeff();
-
-        if (!vi.IsRGB() && !vi.Is444())
-        {
-            if (i == 0)
-                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height,
-                    target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
-            else
-                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
-                    target_width >> sub_w, target_height >> sub_h, radius, crop_left / div_w, crop_top / div_h, crop_width / div_w, crop_height / div_h);
-        }
-        else
-            generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height,
-                target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+        out[0] = new EWAPixelCoeff();
+        out[1] = nullptr;
+        out[2] = nullptr;
+        generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
     }
 
     const bool avx512 = (opt == 3);
     const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
     const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
-    switch (vi.ComponentSize())
+    if (threads)
     {
-        case 1:
-            if (avx512)
-                process_frame = &JincResize::resize_plane_avx512<uint8_t>;
-            else if (avx2)
-                process_frame = &JincResize::resize_plane_avx2<uint8_t>;
-            else if (sse41)
-                process_frame = &JincResize::resize_plane_sse41<uint8_t>;
-            else
-                process_frame = &JincResize::resize_plane_c<uint8_t>;
-            break;
-        case 2:
-            if (avx512)
-                process_frame = &JincResize::resize_plane_avx512<uint16_t>;
-            else if (avx2)
-                process_frame = &JincResize::resize_plane_avx2<uint16_t>;
-            else if (sse41)
-                process_frame = &JincResize::resize_plane_sse41<uint16_t>;
-            else
-                process_frame = &JincResize::resize_plane_c<uint16_t>;
-            break;
-        default:
-            if (avx512)
-                process_frame = &JincResize::resize_plane_avx512<float>;
-            else if (avx2)
-                process_frame = &JincResize::resize_plane_avx2<float>;
-            else if (sse41)
-                process_frame = &JincResize::resize_plane_sse41<float>;
-            else
-                process_frame = &JincResize::resize_plane_c<float>;
-            break;
+        switch (vi.ComponentSize())
+        {
+            case 1:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<uint8_t, 1>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<uint8_t, 1>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<uint8_t, 1>;
+                else
+                    process_frame = &JincResize::resize_plane_c<uint8_t, 1>;
+                break;
+            case 2:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<uint16_t, 1>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<uint16_t, 1>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<uint16_t, 1>;
+                else
+                    process_frame = &JincResize::resize_plane_c<uint16_t, 1>;
+                break;
+            default:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<float, 1>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<float, 1>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<float, 1>;
+                else
+                    process_frame = &JincResize::resize_plane_c<float, 1>;
+                break;
+        }
+    }
+    else
+    {
+        switch (vi.ComponentSize())
+        {
+            case 1:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<uint8_t, 0>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<uint8_t, 0>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<uint8_t, 0>;
+                else
+                    process_frame = &JincResize::resize_plane_c<uint8_t, 0>;
+                break;
+            case 2:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<uint16_t, 0>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<uint16_t, 0>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<uint16_t, 0>;
+                else
+                    process_frame = &JincResize::resize_plane_c<uint16_t, 0>;
+                break;
+            default:
+                if (avx512)
+                    process_frame = &JincResize::resize_plane_avx512<float, 0>;
+                else if (avx2)
+                    process_frame = &JincResize::resize_plane_avx2<float, 0>;
+                else if (sse41)
+                    process_frame = &JincResize::resize_plane_sse41<float, 0>;
+                else
+                    process_frame = &JincResize::resize_plane_c<float, 0>;
+                break;
+        }
     }
 }
 
@@ -667,7 +762,7 @@ PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
     PVideoFrame src = child->GetFrame(n, env);
     PVideoFrame dst = (has_at_least_v8) ? env->NewVideoFrameP(vi, &src) : env->NewVideoFrame(vi);
 
-    (this->*process_frame)(out, src, dst, env);
+    (this->*process_frame)(src, dst, env);
 
     return dst;
 }
@@ -680,16 +775,17 @@ AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnviro
         args[0].AsClip(),
         args[1].AsInt(),
         args[2].AsInt(),
-        args[3].AsFloat(0),
-        args[4].AsFloat(0),
-        args[5].AsFloat(static_cast<float>(vi.width)),
-        args[6].AsFloat(static_cast<float>(vi.height)),
+        args[3].AsFloatf(0.0f),
+        args[4].AsFloatf(0.0f),
+        args[5].AsFloatf(static_cast<float>(vi.width)),
+        args[6].AsFloatf(static_cast<float>(vi.height)),
         args[7].AsInt(256),
         args[8].AsInt(256),
         args[9].AsInt(3),
-        args[10].AsFloat(0),
-        args[11].AsInt(0),
-        args[12].AsInt(-1),
+        args[10].AsFloatf(0.0f),
+        args[11].AsString(""),
+        args[12].AsInt(0),
+        args[13].AsInt(-1),
         env);
 }
 
@@ -712,7 +808,9 @@ static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx 
     if (args[src_left_idx + 5].Defined())
         out_args->add(args[src_left_idx + 5], "quant_y");
     if (args[src_left_idx + 6].Defined())
-        out_args->add(args[src_left_idx + 6], "threads");
+        out_args->add(args[src_left_idx + 6], "cplace");
+    if (args[src_left_idx + 7].Defined())
+        out_args->add(args[src_left_idx + 7], "threads");
 }
 
 template <int taps>
@@ -721,7 +819,7 @@ AVSValue __cdecl resizer_jinc36resize(AVSValue args, void* user_data, IScriptEnv
     Arguments mapped_args;
 
     resizer(args, &mapped_args);
-    mapped_args.add(args[10].AsInt(taps), "tap");
+    mapped_args.add(args[11].AsInt(taps), "tap");
 
     return env->Invoke("JincResize", mapped_args.args(), mapped_args.arg_names()).AsClip();
 }
@@ -733,12 +831,12 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 {
     AVS_linkage = vectors;
 
-    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[threads]i[opt]i", Create_JincResize, 0);
+    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[cplace]s[threads]i[opt]i", Create_JincResize, 0);
 
-    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<3>, 0);
-    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<4>, 0);
-    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<6>, 0);
-    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[threads]i", resizer_jinc36resize<8>, 0);
+    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<3>, 0);
+    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<4>, 0);
+    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<6>, 0);
+    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<8>, 0);
 
     return "JincResize";
 }
