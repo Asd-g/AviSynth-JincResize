@@ -1,4 +1,4 @@
-# Description
+## Description
 
 Jinc (EWA Lanczos) resampling plugin for AviSynth 2.6 / AviSynth+.
 
@@ -6,7 +6,13 @@ This is [a port of the VapourSynth plugin JincResize](https://github.com/Kiyamou
 
 SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize](https://github.com/AviSynth/jinc-resize).
 
-# Usage
+### Requirements:
+
+- AviSynth 2.60 / AviSynth+ 3.4 or later
+
+- Microsoft VisualC++ Redistributable Package 2022 (can be downloaded from [here](https://github.com/abbodi1406/vcredist/releases))
+
+### Usage:
 
 ```
 JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", string "cplace", int "threads", int "opt")
@@ -22,7 +28,7 @@ JincResize (clip, int target_width, int target_height, float "src_left", float "
 Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", string "cplace", int "threads")
 ```
 
-## Parameters:
+### Parameters:
 
 - clip\
     A clip to process. All planar formats are supported.
@@ -90,26 +96,24 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
     3: Use AVX-512 code.\
     Default: -1.
 
-# Building
+### Building:
 
-## Windows
+- Windows\
+    Use solution files.
 
-Use solution files.
-
-## Linux
-
-### Requirements
-
-- Git
-- C++17 compiler
-- CMake >= 3.16
-
-```
-git clone https://github.com/Asd-g/AviSynth-JincResize && \
-cd AviSynth-JincResize && \
-mkdir build && \
-cd build && \
-cmake .. && \
-make -j$(nproc) && \
-sudo make install
-```
+- Linux
+    ```
+    Requirements:
+        - Git
+        - C++17 compiler
+        - CMake >= 3.16
+    ```
+    ```
+    git clone https://github.com/Asd-g/AviSynth-JincResize && \
+    cd AviSynth-JincResize && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    sudo make install
+    ```
