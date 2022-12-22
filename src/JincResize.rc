@@ -2,8 +2,8 @@
 #include <ntdef.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION             2,1,0,0
-PRODUCTVERSION        	2,1,0,0
+FILEVERSION             2,1,1,0
+PRODUCTVERSION        	2,1,1,0
 FILEFLAGSMASK           VS_FFI_FILEFLAGSMASK
 FILEFLAGS               0x0L
 FILEOS                  VOS__WINDOWS32
@@ -16,11 +16,11 @@ BEGIN
         BEGIN
         VALUE "Comments",         "Jinc (EWA Lanczos) resampling filter."
         VALUE "FileDescription",  "JincResize for AviSynth 2.6 / AviSynth+"
-        VALUE "FileVersion",      "2.1.0"
+        VALUE "FileVersion",      "2.1.1"
         VALUE "InternalName",     "JincResize"
         VALUE "OriginalFilename", "JincResize.dll"
         VALUE "ProductName",      "JincResize"
-        VALUE "ProductVersion",   "2.1.0"
+        VALUE "ProductVersion",   "2.1.1"
         END
     END
     BLOCK "VarFileInfo"

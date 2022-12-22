@@ -1,9 +1,13 @@
+##### 2.1.1:
+    Changed back the behavior of parameter `blur`.
+    Set frame property `_ChromaLocation`.
+
 ##### 2.1.0:
-     Added parameter cplace.
-     Changed omp parallel execution to C++17 parallel execution (better speed).
+    Added parameter cplace.
+    Changed omp parallel execution to C++17 parallel execution (better speed).
 
 ##### 2.0.2:
-     Fixed output for SIMD and threads > 1
+    Fixed output for SIMD and threads > 1
 
 ##### 2.0.1:
     Used MSVC instead Intel C++ for faster binaries.
@@ -28,4 +32,3 @@
 
 ##### 1.0.0:
     Port of the VapourSynth plugin JincResize r7.1.
-    
