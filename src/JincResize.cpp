@@ -559,9 +559,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (quant_y < 1 || quant_y > 256)
         env->ThrowError("JincResize: quant_y must be between 1..256.");
 
-    has_at_least_v8 = true;
-    try { env->CheckVersion(8); }
-    catch (const AvisynthError&) { has_at_least_v8 = false; };
+    has_at_least_v8 = env->FunctionExists("propShow");
 
     if (!cplace.empty())
     {
@@ -599,8 +597,6 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: topleft must be used only for 4:2:0 chroma subsampling.");
     if (opt > 3)
         env->ThrowError("JincResize: opt higher than 3 is not allowed.");
-    if (blur < 0.0 || blur > 10.0)
-        env->ThrowError("JincResize: blur must be between 0.0..10.0.");
     if (opt == 3 && !(env->GetCPUFlags() & CPUF_AVX512F))
         env->ThrowError("JincResize: opt=3 requires AVX-512F.");
     if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2))
@@ -615,11 +611,13 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     if (crop_height <= 0.0)
         crop_height = vi.height - crop_top + crop_height;
 
+    if (!blur)
+        blur = 1.0;
+
     const int src_width = vi.width;
     const int src_height = vi.height;
     vi.width = target_width;
     vi.height = target_height;
-    blur = 1.0 - blur / 100.0;
     peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
     const double radius = jinc_zeros[tap - 1];
     constexpr int samples = 1024;  // should be a multiple of 4
