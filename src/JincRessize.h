@@ -35,6 +35,7 @@ public:
 
 class JincResize : public GenericVideoFilter
 {
+    std::string cplace;
     Lut* init_lut;
     EWAPixelCoeff* out[3];
     int planecount;

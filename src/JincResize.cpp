@@ -547,8 +547,8 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
 }
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
-    std::string cplace, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child)
+    std::string cplace_, int threads, int opt, IScriptEnvironment* env)
+    : GenericVideoFilter(_child), cplace(cplace_)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -761,6 +761,16 @@ PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
     PVideoFrame dst = (has_at_least_v8) ? env->NewVideoFrameP(vi, &src) : env->NewVideoFrame(vi);
 
     (this->*process_frame)(src, dst, env);
+
+    if (has_at_least_v8)
+    {
+        if (cplace == "mpeg2")
+            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 0, 0);
+        else if (cplace == "mpeg1")
+            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 1, 0);
+        else
+            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 2, 0);
+    }
 
     return dst;
 }
