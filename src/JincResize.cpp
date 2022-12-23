@@ -762,7 +762,7 @@ PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
 
     (this->*process_frame)(src, dst, env);
 
-    if (has_at_least_v8)
+    if (has_at_least_v8 && (vi.Is420() || vi.Is422() || vi.IsYV411()))
     {
         if (cplace == "mpeg2")
             env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 0, 0);

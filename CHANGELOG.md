@@ -1,3 +1,6 @@
+##### 2.1.2:
+    Set frame property `_ChromaLocation` only for 420, 422, 411 clips.
+
 ##### 2.1.1:
     Changed back the behavior of parameter `blur`.
     Set frame property `_ChromaLocation`.
