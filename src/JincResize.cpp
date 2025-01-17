@@ -622,44 +622,51 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     init_lut->InitLut(samples, radius, blur);
     planecount = min(vi.NumComponents(), 3);
 
-    if (planecount > 1)
+    try
     {
-        if (vi.Is444() || vi.IsRGB())
+        if (planecount > 1)
         {
-            for (int i = 0; i < planecount; ++i)
+            if (vi.Is444() || vi.IsRGB())
             {
-                out[i] = new EWAPixelCoeff();
-                generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+                for (int i = 0; i < planecount; ++i)
+                {
+                    out[i] = new EWAPixelCoeff();
+                    generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+                }
+            }
+            else
+            {
+                const int sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
+                const int sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
+                const double div_w = 1 << sub_w;
+                const double div_h = 1 << sub_h;
+
+                const double crop_left_uv = (cplace == "mpeg2" || cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_width) / target_width) + crop_left) / div_w : crop_left / div_w;
+                const double crop_top_uv = (cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
+
+                for (int i = 0; i < planecount; ++i)
+                {
+                    out[i] = new EWAPixelCoeff();
+
+                    if (i == 0)
+                        generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+                    else
+                        generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                            target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
+                }
             }
         }
         else
         {
-            const int sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
-            const int sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
-            const double div_w = 1 << sub_w;
-            const double div_h = 1 << sub_h;
-
-            const double crop_left_uv = (cplace == "mpeg2" || cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_width) / target_width) + crop_left) / div_w : crop_left / div_w;
-            const double crop_top_uv = (cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
-
-            for (int i = 0; i < planecount; ++i)
-            {
-                out[i] = new EWAPixelCoeff();
-
-                if (i == 0)
-                    generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
-                else
-                    generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
-                        target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
-            }
+            out[0] = new EWAPixelCoeff();
+            out[1] = nullptr;
+            out[2] = nullptr;
+            generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
         }
     }
-    else
+    catch (const std::exception&)
     {
-        out[0] = new EWAPixelCoeff();
-        out[1] = nullptr;
-        out[2] = nullptr;
-        generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+        env->ThrowError("JincResize: cannot allocate memory");
     }
 
     const bool avx512 = (opt == 3);
