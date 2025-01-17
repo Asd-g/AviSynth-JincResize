@@ -9,7 +9,8 @@
 
 struct EWAPixelCoeffMeta
 {
-    int start_x, start_y;
+    int start_x;
+    int start_y;
     int coeff_meta;
 };
 
@@ -18,7 +19,8 @@ struct EWAPixelCoeff
     float* factor;
     EWAPixelCoeffMeta* meta;
     int* factor_map;
-    int filter_size, quantize_x, quantize_y, coeff_stride;
+    int filter_size;
+    int coeff_stride;
 };
 
 class Lut

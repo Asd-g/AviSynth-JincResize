@@ -282,8 +282,6 @@ static void init_coeff_table(EWAPixelCoeff* out, int quantize_x, int quantize_y,
     int filter_size, int dst_width, int dst_height)
 {
     out->filter_size = filter_size;
-    out->quantize_x = quantize_x;
-    out->quantize_y = quantize_y;
     out->coeff_stride = (filter_size + 15) & ~15;
 
     // Allocate metadata
@@ -346,7 +344,6 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     // Use to advance the coeff pointer
     const int coeff_per_pixel = out->coeff_stride * filter_size;
 
-    tmp_array.reserve(static_cast<int64_t>(dst_width) * dst_height * coeff_per_pixel);
 
     for (int y = 0; y < dst_height; ++y)
     {
