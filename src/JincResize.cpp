@@ -845,10 +845,10 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 
     env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[cplace]s[threads]i[opt]i", Create_JincResize, 0);
 
-    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<3>, 0);
-    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<4>, 0);
-    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<6>, 0);
-    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<8>, 0);
+    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i[opt]i", resizer_jinc36resize<3>, 0);
+    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i[opt]i", resizer_jinc36resize<4>, 0);
+    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i[opt]i", resizer_jinc36resize<6>, 0);
+    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i[opt]i", resizer_jinc36resize<8>, 0);
 
     return "JincResize";
 }
