@@ -669,8 +669,12 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         env->ThrowError("JincResize: cannot allocate memory");
     }
 
+#if defined(__AVX512F__)
     const bool avx512 = (opt == 3);
+#endif
+#if defined(__AVX2__)
     const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
+#endif
     const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
 
     if (threads)
@@ -678,11 +682,17 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         switch (vi.ComponentSize())
         {
             case 1:
+#if defined(__AVX512F__)
                 if (avx512)
                     process_frame = &JincResize::resize_plane_avx512<uint8_t, 1>;
-                else if (avx2)
+                else
+#endif
+#if defined(__AVX2__)
+                if (avx2)
                     process_frame = &JincResize::resize_plane_avx2<uint8_t, 1>;
-                else if (sse41)
+                else
+#endif
+                if (sse41)
                     process_frame = &JincResize::resize_plane_sse41<uint8_t, 1>;
                 else
                     process_frame = &JincResize::resize_plane_c<uint8_t, 1>;
@@ -698,11 +708,17 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
                     process_frame = &JincResize::resize_plane_c<uint16_t, 1>;
                 break;
             default:
+#if defined(__AVX512F__)
                 if (avx512)
                     process_frame = &JincResize::resize_plane_avx512<float, 1>;
-                else if (avx2)
+                else
+#endif
+#if defined(__AVX2__)
+                if (avx2)
                     process_frame = &JincResize::resize_plane_avx2<float, 1>;
-                else if (sse41)
+                else
+#endif
+                if (sse41)
                     process_frame = &JincResize::resize_plane_sse41<float, 1>;
                 else
                     process_frame = &JincResize::resize_plane_c<float, 1>;
@@ -714,31 +730,49 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         switch (vi.ComponentSize())
         {
             case 1:
+#if defined(__AVX512F__)
                 if (avx512)
                     process_frame = &JincResize::resize_plane_avx512<uint8_t, 0>;
-                else if (avx2)
+                else
+#endif
+#if defined(__AVX2__)
+                if (avx2)
                     process_frame = &JincResize::resize_plane_avx2<uint8_t, 0>;
-                else if (sse41)
+                else
+#endif
+                if (sse41)
                     process_frame = &JincResize::resize_plane_sse41<uint8_t, 0>;
                 else
                     process_frame = &JincResize::resize_plane_c<uint8_t, 0>;
                 break;
             case 2:
+#if defined(__AVX512F__)
                 if (avx512)
                     process_frame = &JincResize::resize_plane_avx512<uint16_t, 0>;
-                else if (avx2)
+                else
+#endif
+#if defined(__AVX2__)
+                if (avx2)
                     process_frame = &JincResize::resize_plane_avx2<uint16_t, 0>;
-                else if (sse41)
+                else
+#endif
+                if (sse41)
                     process_frame = &JincResize::resize_plane_sse41<uint16_t, 0>;
                 else
                     process_frame = &JincResize::resize_plane_c<uint16_t, 0>;
                 break;
             default:
+#if defined(__AVX512F__)
                 if (avx512)
                     process_frame = &JincResize::resize_plane_avx512<float, 0>;
-                else if (avx2)
+                else
+#endif
+#if defined(__AVX2__)
+                if (avx2)
                     process_frame = &JincResize::resize_plane_avx2<float, 0>;
-                else if (sse41)
+                else
+#endif
+                if (sse41)
                     process_frame = &JincResize::resize_plane_sse41<float, 0>;
                 else
                     process_frame = &JincResize::resize_plane_c<float, 0>;
