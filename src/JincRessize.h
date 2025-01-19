@@ -48,10 +48,14 @@ class JincResize : public GenericVideoFilter
     void resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
     template <typename T, int thr>
     void resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+#if defined(__AVX2__)
     template <typename T, int thr>
     void resize_plane_avx2(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+#endif
+#if defined(__AVX512F__)
     template <typename T, int thr>
     void resize_plane_avx512(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+#endif
 
     void(JincResize::*process_frame)(PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
 
