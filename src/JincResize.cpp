@@ -218,11 +218,7 @@ static double jinc_sqr(double x2)
     else if (x2 < 52.57)  // the 5~7-tap radius
     {
         const auto x = M_PI * sqrt(x2);
-#if defined(GCC)
-        return 2.0 * __j1(x) / x;
-#else
         return 2.0 * std::cyl_bessel_j(1, x) / x;
-#endif
     }
     else if (x2 < 68.07)  // the 8-tap radius // Modify from pull request #4
     {
@@ -231,11 +227,7 @@ static double jinc_sqr(double x2)
     else                  // the 9~16-tap radius
     {
         const auto x = M_PI * sqrt(x2);
-#if defined(GCC)
-        return 2.0 * __j1(x) / x;
-#else
         return 2.0 * std::cyl_bessel_j(1, x) / x;
-#endif
     }
 }
 
