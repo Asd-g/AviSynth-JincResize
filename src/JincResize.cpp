@@ -308,9 +308,9 @@ static void delete_coeff_table(EWAPixelCoeff* out)
     if (out == nullptr)
         return;
 
-    aligned_free(out->factor);
-    delete[] out->meta;
-    delete[] out->factor_map;
+	aligned_free(out->factor);
+	delete[] out->meta;
+	delete[] out->factor_map;
 }
 
 /* Coefficient table generation */
@@ -544,7 +544,7 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
     std::string cplace_, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), cplace(cplace_), out{ nullptr, nullptr, nullptr }
+    : GenericVideoFilter(_child), cplace(cplace_), out{ nullptr, nullptr, nullptr, nullptr }
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -619,7 +619,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     constexpr int samples = 1024;  // should be a multiple of 4
     init_lut = new Lut();
     init_lut->InitLut(samples, radius, blur);
-    planecount = min(vi.NumComponents(), 3);
+    planecount = min(vi.NumComponents(), 4); // support up to RGBA/YUVA all planes resize
+	bAllPlanesEqual = false;
 
     try
     {
@@ -627,11 +628,28 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         {
             if (vi.Is444() || vi.IsRGB())
             {
-                for (int i = 0; i < planecount; ++i)
+				bAllPlanesEqual = true;
+				// calc coeff_table only once 
+				out[0] = new EWAPixelCoeff();
+				generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+
+				// fill copy of structure for other planes
+				for (int i = 1; i < planecount; ++i)
+				{
+					out[i] = new EWAPixelCoeff();
+
+					out[i]->coeff_stride = out[0]->coeff_stride;
+					out[i]->factor = out[0]->factor;
+					out[i]->factor_map = out[0]->factor_map;
+					out[i]->filter_size = out[0]->filter_size;
+					out[i]->meta = out[0]->meta;
+				}
+
+/*                for (int i = 0; i < planecount; ++i)
                 {
                     out[i] = new EWAPixelCoeff();
                     generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
-                }
+                }*/
             }
             else
             {
@@ -663,11 +681,23 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     }
     catch (const std::exception&)
     {
-        for (int i = 0; i < planecount; ++i)
-        {
-            delete_coeff_table(out[i]);
-            delete out[i];
-        }
+		if (!bAllPlanesEqual)
+		{
+			for (int i = 0; i < planecount; ++i)
+			{
+				delete_coeff_table(out[i]);
+				delete out[i];
+			}
+		}
+		else
+		{
+			delete_coeff_table(out[0]);
+
+			for (int i = 0; i < planecount; ++i)
+			{
+				delete out[i];
+			}
+		}
 
         delete[] init_lut->lut;
         delete init_lut;
@@ -758,11 +788,24 @@ JincResize::~JincResize()
     delete[] init_lut->lut;
     delete init_lut;
 
-    for (int i = 0; i < planecount; ++i)
-    {
-        delete_coeff_table(out[i]);
-        delete out[i];
-    }
+	if (!bAllPlanesEqual)
+	{
+		for (int i = 0; i < planecount; ++i)
+		{
+			delete_coeff_table(out[i]);
+			delete out[i];
+		}
+	}
+	else
+	{
+		delete_coeff_table(out[0]);
+
+		for (int i = 0; i < planecount; ++i)
+		{
+			delete out[i];
+		}
+	}
+
 }
 
 PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)

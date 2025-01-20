@@ -5,7 +5,7 @@
 #include <execution>
 
 #include "avisynth.h"
-#include "avs/minmax.h"
+#include "avs\minmax.h"
 
 struct EWAPixelCoeffMeta
 {
@@ -39,10 +39,11 @@ class JincResize : public GenericVideoFilter
 {
     std::string cplace;
     Lut* init_lut;
-    EWAPixelCoeff* out[3];
+    EWAPixelCoeff* out[4];
     int planecount;
     bool has_at_least_v8;
     float peak;
+	bool bAllPlanesEqual;
 
     template<typename T, int thr>
     void resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
