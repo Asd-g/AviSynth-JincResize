@@ -6,9 +6,9 @@
 AVS_FORCEINLINE void* aligned_malloc(size_t size, size_t align)
 {
     void* result = [&]() {
-#ifdef _MSC_VER 
+#ifdef _MSC_VER
         return _aligned_malloc(size, align);
-#else 
+#else
         if (posix_memalign(&result, align, size))
             return result = nullptr;
         else
@@ -21,9 +21,9 @@ AVS_FORCEINLINE void* aligned_malloc(size_t size, size_t align)
 
 AVS_FORCEINLINE void aligned_free(void* ptr)
 {
-#ifdef _MSC_VER 
+#ifdef _MSC_VER
     _aligned_free(ptr);
-#else 
+#else
     free(ptr);
 #endif
 }
@@ -544,7 +544,7 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
     std::string cplace_, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), cplace(cplace_)
+    : GenericVideoFilter(_child), cplace(cplace_), out{ nullptr, nullptr, nullptr }
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -658,14 +658,21 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         else
         {
             out[0] = new EWAPixelCoeff();
-            out[1] = nullptr;
-            out[2] = nullptr;
             generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
         }
     }
     catch (const std::exception&)
     {
-        env->ThrowError("JincResize: cannot allocate memory");
+        for (int i = 0; i < planecount; ++i)
+        {
+            delete_coeff_table(out[i]);
+            delete out[i];
+        }
+
+        delete[] init_lut->lut;
+        delete init_lut;
+
+        env->ThrowError("JincResize: failed to allocate memory for coefficient buffer");
     }
 
     const bool avx512 = (opt == 3);
