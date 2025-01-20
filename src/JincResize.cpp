@@ -327,7 +327,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     const float filter_support = max(filter_support_x, filter_support_y);
     const int filter_size = max(static_cast<int>(ceil(filter_support_x * 2.0)), static_cast<int>(ceil(filter_support_y * 2.0)));
 
-    const float start_x = static_cast<float>(crop_left + (crop_width - dst_width) / (dst_width * static_cast<int64_t>(2)));
+    const float start_x = static_cast<float>(crop_left + (crop_width / dst_width - 1.0 ) / 2.0);
 
     const float x_step = static_cast<float>(crop_width / dst_width);
     const float y_step = static_cast<float>(crop_height / dst_height);
@@ -343,7 +343,6 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
     // Use to advance the coeff pointer
     const int coeff_per_pixel = out->coeff_stride * filter_size;
-
 
     for (int y = 0; y < dst_height; ++y)
     {
@@ -387,8 +386,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
             meta->start_y = window_begin_y;
 
             // Quantize xpos and ypos
-            const int quantized_x_int = lrint(static_cast<double>(xpos) * quantize_x);
-            const int quantized_y_int = lrint(static_cast<double>(ypos) * quantize_y);
+            const int quantized_x_int = static_cast<int>(xpos * quantize_x);
+            const int quantized_y_int = static_cast<int>(ypos * quantize_y);
             const int quantized_x_value = quantized_x_int % quantize_x;
             const int quantized_y_value = quantized_y_int % quantize_y;
             const float quantized_xpos = static_cast<float>(quantized_x_int) / quantize_x;
