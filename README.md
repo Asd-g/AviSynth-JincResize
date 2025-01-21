@@ -6,6 +6,8 @@ This is [a port of the VapourSynth plugin JincResize](https://github.com/Kiyamou
 
 SSE / AVX Intrinsics taken from [the other AviSynth plugin JincResize](https://github.com/AviSynth/jinc-resize).
 
+NOTE: The 32-bit version is not supported. If you still want to use it keep in mind that the OS memory limit can be easily hit. (#10)
+
 ### Requirements:
 
 - AviSynth 2.60 / AviSynth+ 3.4 or later
