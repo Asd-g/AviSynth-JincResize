@@ -97,22 +97,17 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
 
 ### Building:
 
-- Windows\
-    Use solution files.
+```
+Requirements:
+- Git
+- C++17 compiler
+- CMake >= 3.16
+- Ninja
+```
 
-- Linux
-    ```
-    Requirements:
-        - Git
-        - C++17 compiler
-        - CMake >= 3.16
-    ```
-    ```
-    git clone https://github.com/Asd-g/AviSynth-JincResize && \
-    cd AviSynth-JincResize && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make -j$(nproc) && \
-    sudo make install
-    ```
+```
+git clone https://github.com/Asd-g/AviSynth-JincResize && \
+cd AviSynth-JincResize
+cmake -B build -G Ninja
+ninja -C build
+```
