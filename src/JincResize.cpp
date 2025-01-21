@@ -830,12 +830,12 @@ static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx 
 }
 
 template <int taps>
-AVSValue __cdecl resizer_jinc36resize(AVSValue args, void* user_data, IScriptEnvironment* env)
+AVSValue __cdecl resizer_jincresize(AVSValue args, void* user_data, IScriptEnvironment* env)
 {
     Arguments mapped_args;
 
     resizer(args, &mapped_args);
-    mapped_args.add(args[11].AsInt(taps), "tap");
+    mapped_args.add(taps, "tap");
 
     return env->Invoke("JincResize", mapped_args.args(), mapped_args.arg_names()).AsClip();
 }
@@ -849,10 +849,10 @@ const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Li
 
     env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[cplace]s[threads]i[opt]i", Create_JincResize, 0);
 
-    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<3>, 0);
-    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<4>, 0);
-    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<6>, 0);
-    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jinc36resize<8>, 0);
+    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<3>, 0);
+    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<4>, 0);
+    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<6>, 0);
+    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<8>, 0);
 
     return "JincResize";
 }
