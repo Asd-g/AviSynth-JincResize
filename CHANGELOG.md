@@ -1,3 +1,8 @@
+##### 2.1.3:
+    Fixed bug that can cause vertical lines.
+    Reduced used memory (thanks DTL2020 for the ideas).
+    Fixed JincXXXResize calling.
+
 ##### 2.1.2:
     Set frame property `_ChromaLocation` only for 420, 422, 411 clips.
 
