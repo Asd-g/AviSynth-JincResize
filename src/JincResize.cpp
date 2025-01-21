@@ -540,6 +540,87 @@ void JincResize::resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_Sc
     }
 }
 
+/* Planar resampling with single point of coeff table for all planes */
+template<typename T, int thr, int subsampled>
+void JincResize::resize_eqplanes_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi)
+{
+	const int planes_y[4] = { AVS_PLANAR_Y, AVS_PLANAR_U, AVS_PLANAR_V, AVS_PLANAR_A };
+	const int planes_r[4] = { AVS_PLANAR_G, AVS_PLANAR_B, AVS_PLANAR_R, AVS_PLANAR_A };
+	const int* current_planes = (avs_is_rgb(vi)) ? planes_r : planes_y;
+
+	int src_stride[4];
+	int dst_stride[4];
+	T* srcp[4];
+
+	for (int i = 0; i < planecount; ++i)
+	{
+		const int plane = current_planes[i];
+
+		src_stride[i] = avs_get_pitch_p(src, plane) / sizeof(T);
+		dst_stride[i] = avs_get_pitch_p(dst, plane) / sizeof(T);
+		srcp[i] = (T*)(avs_get_read_ptr_p(src, plane));
+	}
+
+	const int dst_width = avs_get_row_size_p(dst, current_planes[0]) / sizeof(T); // must be equal for all planes
+	const int dst_height = avs_get_height_p(dst, current_planes[0]); // must be equal for all planes
+
+	EWAPixelCoeff* out = JincResize::out[0];
+
+	auto loop = [&](int y)
+	{
+		T* dstp_planes[4];
+
+		for (int i = 0; i < planecount; ++i)
+		{
+			const int plane = current_planes[i];
+			dstp_planes[i] = reinterpret_cast<T*>(avs_get_write_ptr_p(dst, plane)) + static_cast<int64_t>(y)* dst_stride[i];
+		}
+
+		for (int x = 0; x < dst_width; ++x)
+		{
+			EWAPixelCoeffMeta* meta = out->meta + static_cast<int64_t>(y)* dst_width + x; // one for all planes
+			const float* coeff_ptr = out->factor + meta->coeff_meta; // one for all planes
+
+			for (int i = 0; i < planecount; ++i)
+			{
+				const T* src_ptr = srcp[i] + meta->start_y * static_cast<int64_t>(src_stride[i]) + meta->start_x;
+				T* dstp = dstp_planes[i];
+
+				float result = 0.f;
+
+				for (int ly = 0; ly < out->filter_size; ++ly)
+				{
+					for (int lx = 0; lx < out->filter_size; ++lx)
+						result += src_ptr[lx] * coeff_ptr[lx];
+
+					coeff_ptr += out->coeff_stride;
+					src_ptr += src_stride[i];
+				}
+
+				if constexpr (std::is_integral_v<T>)
+					dstp[x] = static_cast<T>(lrintf(clamp(result, 0.f, peak)));
+				else
+					dstp[x] = result;
+			}
+		}
+
+	};
+
+	if constexpr (thr)
+	{
+		for (intptr_t i = 0; i < dst_height; ++i)
+			loop(i);
+	}
+	else
+	{
+		std::vector<int> l(dst_height);
+		std::iota(std::begin(l), std::end(l), 0);
+		std::for_each(std::execution::par, std::begin(l), std::end(l), loop);
+	}
+
+}
+
+
 static AVS_VideoFrame* AVSC_CC JincResize_GetFrame(AVS_FilterInfo* fi, int n)
 {
     JincResize* d = reinterpret_cast<JincResize*>(fi->user_data);
@@ -794,7 +875,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 1, 1> : &JincResize::resize_plane_sse41<uint8_t, 1, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 1, 1> : &JincResize::resize_plane_c<uint8_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 1, 1> : &JincResize::resize_eqplanes_c<uint8_t, 1, 0>;
                 break;
             case 2:
                 if (avx512)
@@ -804,7 +885,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 1, 1> : &JincResize::resize_plane_sse41<uint16_t, 1, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 1, 1> : &JincResize::resize_plane_c<uint16_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 1, 1> : &JincResize::resize_eqplanes_c<uint16_t, 1, 0>;
                 break;
             default:
                 if (avx512)
@@ -814,7 +895,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 1, 1> : &JincResize::resize_plane_sse41<float, 1, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 1, 1> : &JincResize::resize_plane_c<float, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 1, 1> : &JincResize::resize_eqplanes_c<float, 1, 0>;
                 break;
         }
     }
@@ -830,7 +911,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 0, 1> : &JincResize::resize_plane_sse41<uint8_t, 0, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 0, 1> : &JincResize::resize_plane_c<uint8_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 0, 1> : &JincResize::resize_eqplanes_c<uint8_t, 0, 0>;
                 break;
             case 2:
                 if (avx512)
@@ -840,7 +921,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 0, 1> : &JincResize::resize_plane_sse41<uint16_t, 0, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 0, 1> : &JincResize::resize_plane_c<uint16_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 0, 1> : &JincResize::resize_eqplanes_c<uint16_t, 0, 0>;
                 break;
             default:
                 if (avx512)
@@ -850,7 +931,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 else if (sse41)
                     d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 0, 1> : &JincResize::resize_plane_sse41<float, 0, 0>;
                 else
-                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 0, 1> : &JincResize::resize_plane_c<float, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 0, 1> : &JincResize::resize_eqplanes_c<float, 0, 0>;
                 break;
         }
     }

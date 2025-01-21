@@ -47,6 +47,9 @@ struct JincResize
 
     template<typename T, int thr, int subsampled>
     void resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+	template<typename T, int thr, int subsampled>
+	void resize_eqplanes_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+
     template <typename T, int thr, int subsampled>
     void resize_plane_sse41(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
     template <typename T, int thr, int subsampled>
