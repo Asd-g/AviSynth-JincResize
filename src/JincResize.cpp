@@ -661,7 +661,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     }
     catch (const std::exception&)
     {
-        for (int i = 0; i < out.size(); ++i)
+        for (int i = 0; i < static_cast<int>(out.size()); ++i)
         {
             delete_coeff_table(out[i]);
             delete out[i];
@@ -753,7 +753,7 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
 JincResize::~JincResize()
 {
-    for (int i = 0; i < out.size(); ++i)
+    for (int i = 0; i < static_cast<int>(out.size()); ++i)
     {
         delete_coeff_table(out[i]);
         delete out[i];
