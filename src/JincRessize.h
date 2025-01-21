@@ -1,8 +1,9 @@
 #ifndef __JINCRESIZE_H__
 #define __JINCRESIZE_H__
 
-#include <string>
 #include <execution>
+#include <string>
+#include <vector>
 
 #include "avisynth.h"
 #include "avs/minmax.h"
@@ -39,18 +40,18 @@ class JincResize : public GenericVideoFilter
 {
     std::string cplace;
     Lut* init_lut;
-    EWAPixelCoeff* out[3];
+    std::vector<EWAPixelCoeff*> out;
     int planecount;
     bool has_at_least_v8;
     float peak;
 
-    template<typename T, int thr>
+    template<typename T, int thr, int subsampled>
     void resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T, int thr>
+    template <typename T, int thr, int subsampled>
     void resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T, int thr>
+    template <typename T, int thr, int subsampled>
     void resize_plane_avx2(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-    template <typename T, int thr>
+    template <typename T, int thr, int subsampled>
     void resize_plane_avx512(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
 
     void(JincResize::*process_frame)(PVideoFrame&, PVideoFrame&, IScriptEnvironment*);

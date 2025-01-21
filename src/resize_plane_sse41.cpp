@@ -2,7 +2,7 @@
 
 #include "JincRessize.h"
 
-template <typename T, int thr>
+template <typename T, int thr, int subsampled>
 void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {
     const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
@@ -19,29 +19,37 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
         const __m128 min_val = (i && !vi.IsRGB()) ? _mm_set_ps1(-0.5f) : _mm_setzero_ps();
 
+        EWAPixelCoeff* out = [&]()
+        {
+            if constexpr (subsampled)
+                return (i) ? (i == 3) ? JincResize::out[0] : JincResize::out[1] : JincResize::out[0];
+            else
+                return JincResize::out[0];
+        }();
+
         auto loop = [&](int y)
         {
             T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
 
             for (int x = 0; x < dst_width; ++x)
             {
-                EWAPixelCoeffMeta* meta = out[i]->meta + static_cast<int64_t>(y) * dst_width + x;
+                EWAPixelCoeffMeta* meta = out->meta + static_cast<int64_t>(y) * dst_width + x;
                 const T* src_ptr = srcp + (meta->start_y * static_cast<int64_t>(src_stride)) + meta->start_x;
-                const float* coeff_ptr = out[i]->factor + meta->coeff_meta;
+                const float* coeff_ptr = out->factor + meta->coeff_meta;
                 __m128 result = _mm_setzero_ps();
 
                 if constexpr (std::is_same_v<T, uint8_t>)
                 {
-                    for (int ly = 0; ly < out[i]->filter_size; ++ly)
+                    for (int ly = 0; ly < out->filter_size; ++ly)
                     {
-                        for (int lx = 0; lx < out[i]->filter_size; lx += 4)
+                        for (int lx = 0; lx < out->filter_size; lx += 4)
                         {
                             const __m128 src_ps = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(*(reinterpret_cast<const int32_t*>(src_ptr + lx)))));
                             const __m128 coeff = _mm_load_ps(coeff_ptr + lx);
                             result = _mm_add_ps(result, _mm_mul_ps(src_ps, coeff));
                         }
 
-                        coeff_ptr += out[i]->coeff_stride;
+                        coeff_ptr += out->coeff_stride;
                         src_ptr += src_stride;
                     }
 
@@ -50,16 +58,16 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
                 }
                 else if constexpr (std::is_same_v<T, uint16_t>)
                 {
-                    for (int ly = 0; ly < out[i]->filter_size; ++ly)
+                    for (int ly = 0; ly < out->filter_size; ++ly)
                     {
-                        for (int lx = 0; lx < out[i]->filter_size; lx += 4)
+                        for (int lx = 0; lx < out->filter_size; lx += 4)
                         {
                             const __m128 src_ps = _mm_cvtepi32_ps(_mm_cvtepu16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src_ptr + lx))));
                             const __m128 coeff = _mm_load_ps(coeff_ptr + lx);
                             result = _mm_add_ps(result, _mm_mul_ps(src_ps, coeff));
                         }
 
-                        coeff_ptr += out[i]->coeff_stride;
+                        coeff_ptr += out->coeff_stride;
                         src_ptr += src_stride;
                     }
 
@@ -68,16 +76,16 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
                 }
                 else
                 {
-                    for (int ly = 0; ly < out[i]->filter_size; ++ly)
+                    for (int ly = 0; ly < out->filter_size; ++ly)
                     {
-                        for (int lx = 0; lx < out[i]->filter_size; lx += 4)
+                        for (int lx = 0; lx < out->filter_size; lx += 4)
                         {
                             const __m128 src_ps = _mm_max_ps(_mm_loadu_ps(src_ptr + lx), min_val);
                             const __m128 coeff = _mm_load_ps(coeff_ptr + lx);
                             result = _mm_add_ps(result, _mm_mul_ps(src_ps, coeff));
                         }
 
-                        coeff_ptr += out[i]->coeff_stride;
+                        coeff_ptr += out->coeff_stride;
                         src_ptr += src_stride;
                     }
 
@@ -100,10 +108,18 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
     }
 }
 
-template void JincResize::resize_plane_sse41<uint8_t, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint16_t, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<float, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
 
-template void JincResize::resize_plane_sse41<uint8_t, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint16_t, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<float, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+
+template void JincResize::resize_plane_sse41<uint8_t, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint16_t, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<float, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+
+template void JincResize::resize_plane_sse41<uint8_t, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint16_t, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<float, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
