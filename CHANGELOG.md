@@ -2,6 +2,7 @@
     Fixed bug that can cause vertical lines.
     Reduced used memory (thanks DTL2020 for the ideas).
     Fixed JincXXXResize calling.
+    Used AviStynh+ API changed from C++ to C.
 
 ##### 2.1.2:
     Set frame property `_ChromaLocation` only for 420, 422, 411 clips.

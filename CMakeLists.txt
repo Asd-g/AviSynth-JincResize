@@ -58,6 +58,8 @@ else()
     set_source_files_properties(src/resize_plane_avx512.cpp PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx512vl;-mfma")
 endif()
 
+target_link_libraries(JincResize PRIVATE avisynth)
+
 target_compile_features(JincResize PRIVATE cxx_std_17)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")

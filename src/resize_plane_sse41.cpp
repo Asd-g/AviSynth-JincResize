@@ -3,21 +3,21 @@
 #include "JincRessize.h"
 
 template <typename T, int thr, int subsampled>
-void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
+void JincResize::resize_plane_sse41(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi)
 {
-    const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
-    const int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsRGB()) ? planes_r : planes_y;
+    const int planes_y[4] = { AVS_PLANAR_Y, AVS_PLANAR_U, AVS_PLANAR_V, AVS_PLANAR_A };
+    const int planes_r[4] = { AVS_PLANAR_G, AVS_PLANAR_B, AVS_PLANAR_R, AVS_PLANAR_A };
+    const int* current_planes = (avs_is_rgb(vi)) ? planes_r : planes_y;
     for (int i = 0; i < planecount; ++i)
     {
         const int plane = current_planes[i];
 
-        const int src_stride = src->GetPitch(plane) / sizeof(T);
-        const int dst_stride = dst->GetPitch(plane) / sizeof(T);
-        const int dst_width = dst->GetRowSize(plane) / sizeof(T);
-        const int dst_height = dst->GetHeight(plane);
-        const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
-        const __m128 min_val = (i && !vi.IsRGB()) ? _mm_set_ps1(-0.5f) : _mm_setzero_ps();
+        const int src_stride = avs_get_pitch_p(src, plane) / sizeof(T);
+        const int dst_stride = avs_get_pitch_p(dst, plane) / sizeof(T);
+        const int dst_width = avs_get_row_size_p(dst, plane) / sizeof(T);
+        const int dst_height = avs_get_height_p(dst, plane);
+        const T* srcp = reinterpret_cast<const T*>(avs_get_read_ptr_p(src, plane));
+        const __m128 min_val = (i && !avs_is_rgb(vi)) ? _mm_set_ps1(-0.5f) : _mm_setzero_ps();
 
         EWAPixelCoeff* out = [&]()
         {
@@ -29,7 +29,7 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
 
         auto loop = [&](int y)
         {
-            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
+            T* __restrict dstp = reinterpret_cast<T*>(avs_get_write_ptr_p(dst, plane)) + static_cast<int64_t>(y) * dst_stride;
 
             for (int x = 0; x < dst_width; ++x)
             {
@@ -108,18 +108,18 @@ void JincResize::resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptE
     }
 }
 
-template void JincResize::resize_plane_sse41<uint8_t, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 0, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<uint16_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<float, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_sse41<uint8_t, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 1, 1>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<uint16_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<float, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_sse41<uint8_t, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 0, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<uint16_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<float, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_sse41<uint8_t, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<uint16_t, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
-template void JincResize::resize_plane_sse41<float, 1, 0>(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+template void JincResize::resize_plane_sse41<uint8_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<uint16_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_sse41<float, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "avisynth.h"
+#include "avisynth_c.h"
 #include "avs/minmax.h"
 
 struct EWAPixelCoeffMeta
@@ -36,7 +36,7 @@ public:
     double* lut;
 };
 
-class JincResize : public GenericVideoFilter
+struct JincResize
 {
     std::string cplace;
     Lut* init_lut;
@@ -46,46 +46,15 @@ class JincResize : public GenericVideoFilter
     float peak;
 
     template<typename T, int thr, int subsampled>
-    void resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    void resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
     template <typename T, int thr, int subsampled>
-    void resize_plane_sse41(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    void resize_plane_sse41(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
     template <typename T, int thr, int subsampled>
-    void resize_plane_avx2(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    void resize_plane_avx2(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
     template <typename T, int thr, int subsampled>
-    void resize_plane_avx512(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env);
+    void resize_plane_avx512(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
 
-    void(JincResize::*process_frame)(PVideoFrame&, PVideoFrame&, IScriptEnvironment*);
-
-public:
-    JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
-        std::string cplace, int threads, int opt, IScriptEnvironment* env);
-    PVideoFrame __stdcall GetFrame(int n, IScriptEnvironment* env);
-    int __stdcall SetCacheHints(int cachehints, int frame_range)
-    {
-        return cachehints == CACHE_GET_MTMODE ? MT_MULTI_INSTANCE : 0;
-    }
-    ~JincResize();
-};
-
-class Arguments
-{
-    AVSValue _args[12];
-    const char* _arg_names[12];
-    int _idx;
-
-public:
-    Arguments() : _args{}, _arg_names{}, _idx{} {}
-
-    void add(AVSValue arg, const char* arg_name = nullptr)
-    {
-        _args[_idx] = arg;
-        _arg_names[_idx] = arg_name;
-        ++_idx;
-    }
-
-    AVSValue args() const { return{ _args, _idx }; }
-
-    const char* const* arg_names() const { return _arg_names; }
+    void(JincResize::* process_frame)(AVS_VideoFrame*, AVS_VideoFrame*, AVS_ScriptEnvironment*, AVS_VideoInfo*);
 };
 
 #endif

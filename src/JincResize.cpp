@@ -474,20 +474,20 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
 /* Planar resampling with coeff table */
 template<typename T, int thr, int subsampled>
-void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
+void JincResize::resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi)
 {
-    const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
-    const int planes_r[4] = { PLANAR_G, PLANAR_B, PLANAR_R, PLANAR_A };
-    const int* current_planes = (vi.IsRGB()) ? planes_r : planes_y;
+    const int planes_y[4] = { AVS_PLANAR_Y, AVS_PLANAR_U, AVS_PLANAR_V, AVS_PLANAR_A };
+    const int planes_r[4] = { AVS_PLANAR_G, AVS_PLANAR_B, AVS_PLANAR_R, AVS_PLANAR_A };
+    const int* current_planes = (avs_is_rgb(vi)) ? planes_r : planes_y;
     for (int i = 0; i < planecount; ++i)
     {
         const int plane = current_planes[i];
 
-        const int src_stride = src->GetPitch(plane) / sizeof(T);
-        const int dst_stride = dst->GetPitch(plane) / sizeof(T);
-        const int dst_width = dst->GetRowSize(plane) / sizeof(T);
-        const int dst_height = dst->GetHeight(plane);
-        const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
+        const int src_stride = avs_get_pitch_p(src, plane) / sizeof(T);
+        const int dst_stride = avs_get_pitch_p(dst, plane) / sizeof(T);
+        const int dst_width = avs_get_row_size_p(dst, plane) / sizeof(T);
+        const int dst_height = avs_get_height_p(dst, plane);
+        const T* srcp = reinterpret_cast<const T*>(avs_get_read_ptr_p(src, plane));
 
         EWAPixelCoeff* out = [&]()
         {
@@ -499,7 +499,7 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
 
         auto loop = [&](int y)
         {
-            T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
+            T* __restrict dstp = reinterpret_cast<T*>(avs_get_write_ptr_p(dst, plane)) + static_cast<int64_t>(y) * dst_stride;
 
             for (int x = 0; x < dst_width; ++x)
             {
@@ -540,20 +540,109 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
     }
 }
 
-JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
-    std::string cplace_, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), cplace(cplace_)
+static AVS_VideoFrame* AVSC_CC JincResize_GetFrame(AVS_FilterInfo* fi, int n)
 {
-    if (!vi.IsPlanar())
-        env->ThrowError("JincResize: clip must be in planar format.");
-    if (tap < 1 || tap > 16)
-        env->ThrowError("JincResize: tap must be between 1..16.");
-    if (quant_x < 1 || quant_x > 256)
-        env->ThrowError("JincResize: quant_x must be between 1..256.");
-    if (quant_y < 1 || quant_y > 256)
-        env->ThrowError("JincResize: quant_y must be between 1..256.");
+    JincResize* d = reinterpret_cast<JincResize*>(fi->user_data);
+    AVS_ScriptEnvironment* env = fi->env;
+    AVS_VideoInfo* vi = &fi->vi;
 
-    has_at_least_v8 = env->FunctionExists("propShow");
+    AVS_VideoFrame* src = avs_get_frame(fi->child, n);
+    if (!src)
+        return nullptr;
+
+    AVS_VideoFrame* dst = (d->has_at_least_v8) ? avs_new_video_frame_p(env, vi, src) : avs_new_video_frame(env, vi);
+
+    (d->*d->process_frame)(src, dst, env, vi);
+
+    if (d->has_at_least_v8 && (avs_is_420(vi) || avs_is_422(vi) || avs_is_yv411(vi)))
+    {
+        if (d->cplace == "mpeg2")
+            avs_prop_set_int(env, avs_get_frame_props_rw(env, dst), "_ChromaLocation", 0, 0);
+        else if (d->cplace == "mpeg1")
+            avs_prop_set_int(env, avs_get_frame_props_rw(env, dst), "_ChromaLocation", 1, 0);
+        else
+            avs_prop_set_int(env, avs_get_frame_props_rw(env, dst), "_ChromaLocation", 2, 0);
+    }
+
+    avs_release_video_frame(src);
+
+    return dst;
+}
+
+static void AVSC_CC free_JincResize(AVS_FilterInfo* fi)
+{
+    JincResize* d = reinterpret_cast<JincResize*>(fi->user_data);
+    std::vector<EWAPixelCoeff*>* out = &d->out;
+
+    for (int i = 0; i < static_cast<int>(out->size()); ++i)
+    {
+        delete_coeff_table((*out)[i]);
+        delete (*out)[i];
+    }
+
+    delete[] d->init_lut->lut;
+    delete d->init_lut;
+
+    delete d;
+}
+
+static int AVSC_CC set_cache_hints_JincResize(AVS_FilterInfo* fi, int cachehints, int frame_range)
+{
+    return cachehints == AVS_CACHE_GET_MTMODE ? 2 : 0;
+}
+
+static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value args, void* param)
+{
+    enum
+    {
+        Clip,
+        Target_width,
+        Target_height,
+        Src_left,
+        Src_top,
+        Src_width,
+        Src_height,
+        Quant_x,
+        Quant_y,
+        Tap,
+        Blur,
+        Cplace,
+        Threads,
+        Opt
+    };
+
+    JincResize* d = reinterpret_cast<JincResize*>(new JincResize());
+
+    AVS_FilterInfo* fi;
+    AVS_Clip* clip = avs_new_c_filter(env, &fi, avs_array_elt(args, Clip), 1);
+    AVS_VideoInfo* vi = &fi->vi;
+
+    const auto set_error = [&](AVS_Clip* clip, const char* msg)
+    {
+        avs_release_clip(clip);
+
+        return avs_new_value_error(msg);
+    };
+
+    if (!avs_is_planar(vi))
+        return set_error(clip, "JincResize: clip must be in planar format.");
+
+    const int tap = avs_defined(avs_array_elt(args, Tap)) ? avs_as_int(avs_array_elt(args, Tap)) : 3;
+    if (tap < 1 || tap > 16)
+        return set_error(clip, "JincResize: tap must be between 1..16.");
+
+    const int quant_x = avs_defined(avs_array_elt(args, Quant_x)) ? avs_as_int(avs_array_elt(args, Quant_x)) : 256;
+    if (quant_x < 1 || quant_x > 256)
+        return set_error(clip, "JincResize: quant_x must be between 1..256.");
+
+    const int quant_y = avs_defined(avs_array_elt(args, Quant_y)) ? avs_as_int(avs_array_elt(args, Quant_y)) : 256;
+    if (quant_y < 1 || quant_y > 256)
+        return set_error(clip, "JincResize: quant_y must be between 1..256.");
+
+    const bool has_at_least_v8 = avs_function_exists(env, "propShow");
+    d->has_at_least_v8 = has_at_least_v8;
+
+    std::string cplace = avs_defined(avs_array_elt(args, Cplace)) ? avs_as_string(avs_array_elt(args, Cplace)) : "";
 
     if (!cplace.empty())
     {
@@ -561,23 +650,23 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
             c = tolower(c);
 
         if (cplace != "mpeg2" && cplace != "mpeg1" && cplace != "topleft")
-            env->ThrowError("JincResize: cplace must be MPEG2, MPEG1 or topleft.");
+            return set_error(clip, "JincResize: cplace must be MPEG2, MPEG1 or topleft.");
     }
     else
     {
         if (has_at_least_v8)
         {
-            PVideoFrame frame0 = child->GetFrame(0, env);
-            const AVSMap* props = env->getFramePropsRO(frame0);
+            AVS_VideoFrame* frame0 = avs_get_frame(clip, 0);
+            const AVS_Map* props = avs_get_frame_props_ro(env, frame0);
 
-            if (env->propGetType(props, "_ChromaLocation") == 'i')
+            if (avs_prop_get_type(env, props, "_ChromaLocation") == 'i')
             {
-                switch (env->propGetInt(props, "_ChromaLocation", 0, nullptr))
+                switch (avs_prop_get_int(env, props, "_ChromaLocation", 0, nullptr))
                 {
                     case 0: cplace = "mpeg2"; break;
                     case 1: cplace = "mpeg1"; break;
                     case 2: cplace = "topleft"; break;
-                    default: env->ThrowError((std::string("JincResize: _ChromaLocation ") + std::to_string(env->propGetInt(props, "_ChromaLocation", 0, nullptr)) + " is not supported.").c_str()); break;
+                    default: return set_error(clip, "JincResize: invalid _ChromaLocation"); break;
                 }
             }
             else
@@ -587,57 +676,72 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
             cplace = "mpeg2";
     }
 
-    if (cplace == "topleft" && !vi.Is420())
-        env->ThrowError("JincResize: topleft must be used only for 4:2:0 chroma subsampling.");
+    if (cplace == "topleft" && !avs_is_420(vi))
+        return set_error(clip, "JincResize: topleft must be used only for 4:2:0 chroma subsampling.");
+
+    const int opt = avs_defined(avs_array_elt(args, Opt)) ? avs_as_int(avs_array_elt(args, Opt)) : -1;
+    const int cpu_flags = avs_get_cpu_flags(env);
     if (opt > 3)
-        env->ThrowError("JincResize: opt higher than 3 is not allowed.");
-    if (opt == 3 && !(env->GetCPUFlags() & CPUF_AVX512F))
-        env->ThrowError("JincResize: opt=3 requires AVX-512F.");
-    if (opt == 2 && !(env->GetCPUFlags() & CPUF_AVX2))
-        env->ThrowError("JincResize: opt=2 requires AVX2.");
-    if (opt == 1 && !(env->GetCPUFlags() & CPUF_SSE4_1))
-        env->ThrowError("JincResize: opt=1 requires SSE4.1.");
+        return set_error(clip, "JincResize: opt higher than 3 is not allowed.");
+    if (opt == 3 && !(cpu_flags & AVS_CPUF_AVX512F))
+        return set_error(clip, "JincResize: opt=3 requires AVX-512F.");
+    if (opt == 2 && !(cpu_flags & AVS_CPUF_AVX2))
+        return set_error(clip, "JincResize: opt=2 requires AVX2.");
+    if (opt == 1 && !(cpu_flags & AVS_CPUF_SSE4_1))
+        return set_error(clip, "JincResize: opt=1 requires SSE4.1.");
+
+    const int threads = avs_defined(avs_array_elt(args, Threads)) ? avs_as_int(avs_array_elt(args, Threads)) : 0;
     if (threads < 0 || threads > 1)
-        env->ThrowError("JincResize: threads must be either 0 or 1.");
+        return set_error(clip, "JincResize: threads must be either 0 or 1.");
 
+    double crop_left = avs_defined(avs_array_elt(args, Src_left)) ? avs_as_float(avs_array_elt(args, Src_left)) : 0.0;
+    double crop_width = avs_defined(avs_array_elt(args, Src_width)) ? avs_as_float(avs_array_elt(args, Src_width)) : static_cast<double>(vi->width);
     if (crop_width <= 0.0)
-        crop_width = vi.width - crop_left + crop_width;
-    if (crop_height <= 0.0)
-        crop_height = vi.height - crop_top + crop_height;
+        crop_width = vi->width - crop_left + crop_width;
 
+    double crop_top = avs_defined(avs_array_elt(args, Src_top)) ? avs_as_float(avs_array_elt(args, Src_top)) : 0.0;
+    double crop_height = avs_defined(avs_array_elt(args, Src_height)) ? avs_as_float(avs_array_elt(args, Src_height)) : static_cast<double>(vi->height);
+    if (crop_height <= 0.0)
+        crop_height = vi->height - crop_top + crop_height;
+
+    double blur = avs_defined(avs_array_elt(args, Blur)) ? avs_as_float(avs_array_elt(args, Blur)) : 0.0;
     if (!blur)
         blur = 1.0;
 
-    const int src_width = vi.width;
-    const int src_height = vi.height;
-    vi.width = target_width;
-    vi.height = target_height;
-    peak = static_cast<float>((1 << vi.BitsPerComponent()) - 1);
+    const int target_width = avs_as_int(avs_array_elt(args, Target_width));
+    const int target_height = avs_as_int(avs_array_elt(args, Target_height));
+
+    const int src_width = vi->width;
+    const int src_height = vi->height;
+    vi->width = target_width;
+    vi->height = target_height;
+    d->peak = static_cast<float>((1 << avs_bits_per_component(vi)) - 1);
     const double radius = jinc_zeros[tap - 1];
     constexpr int samples = 1024;  // should be a multiple of 4
-    init_lut = new Lut();
-    init_lut->InitLut(samples, radius, blur);
-    planecount = vi.NumComponents();
+    d->init_lut = new Lut();
+    d->init_lut->InitLut(samples, radius, blur);
+    d->planecount = avs_num_components(vi);
     bool subsampled = false;
 
     try
     {
-        if (planecount > 1)
+        if (d->planecount > 1)
         {
-            if (vi.Is444() || vi.IsRGB())
+            if (avs_is_444(vi) || avs_is_rgb(vi))
             {
-                out.emplace_back(new EWAPixelCoeff());
-                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
+                d->out.emplace_back(new EWAPixelCoeff());
+                generate_coeff_table_c(d->init_lut, d->out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
                     radius, crop_left, crop_top, crop_width, crop_height);
             }
             else
             {
+                std::vector<EWAPixelCoeff*>* out = &d->out;
                 for (int i = 0; i < 2; ++i)
-                    out.emplace_back(new EWAPixelCoeff());
+                    out->emplace_back(new EWAPixelCoeff());
 
                 subsampled = true;
-                const int sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
-                const int sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
+                const int sub_w = avs_get_plane_width_subsampling(vi, AVS_PLANAR_U);
+                const int sub_h = avs_get_plane_height_subsampling(vi, AVS_PLANAR_U);
                 const double div_w = 1 << sub_w;
                 const double div_h = 1 << sub_h;
 
@@ -646,213 +750,244 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
                 const double crop_top_uv = (cplace == "topleft") ?
                     (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
 
-                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
+                generate_coeff_table_c(d->init_lut, (*out)[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
                     radius, crop_left, crop_top, crop_width, crop_height);
-                generate_coeff_table_c(init_lut, out[1], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                generate_coeff_table_c(d->init_lut, (*out)[1], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
                     target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
             }
         }
         else
         {
-            out[0] = new EWAPixelCoeff();
-            generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius,
+            d->out.emplace_back(new EWAPixelCoeff());
+            generate_coeff_table_c(d->init_lut, d->out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius,
                 crop_left, crop_top, crop_width, crop_height);
         }
     }
     catch (const std::exception&)
     {
-        for (int i = 0; i < static_cast<int>(out.size()); ++i)
+        std::vector<EWAPixelCoeff*>* out = &d->out;
+        for (int i = 0; i < static_cast<int>(d->out.size()); ++i)
         {
-            delete_coeff_table(out[i]);
-            delete out[i];
+            delete_coeff_table((*out)[i]);
+            delete (*out)[i];
         }
 
-        delete[] init_lut->lut;
-        delete init_lut;
+        delete[] d->init_lut->lut;
+        delete d->init_lut;
 
-        env->ThrowError("JincResize: failed to allocate memory for coefficient buffer");
+        return set_error(clip, "JincResize: failed to allocate memory for coefficient buffer");
     }
 
     const bool avx512 = (opt == 3);
-    const bool avx2 = (!!(env->GetCPUFlags() & CPUF_AVX2) && opt < 0) || opt == 2;
-    const bool sse41 = (!!(env->GetCPUFlags() & CPUF_SSE4_1) && opt < 0) || opt == 1;
+    const bool avx2 = (!!(cpu_flags & AVS_CPUF_AVX2) && opt < 0) || opt == 2;
+    const bool sse41 = (!!(cpu_flags & AVS_CPUF_SSE4_1) && opt < 0) || opt == 1;
 
     if (threads)
     {
-        switch (vi.ComponentSize())
+        switch (avs_component_size(vi))
         {
             case 1:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 1, 1> : &JincResize::resize_plane_avx512<uint8_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 1, 1> : &JincResize::resize_plane_avx512<uint8_t, 1, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 1, 1> : &JincResize::resize_plane_avx2<uint8_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 1, 1> : &JincResize::resize_plane_avx2<uint8_t, 1, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 1, 1> : &JincResize::resize_plane_sse41<uint8_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 1, 1> : &JincResize::resize_plane_sse41<uint8_t, 1, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 1, 1> : &JincResize::resize_plane_c<uint8_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 1, 1> : &JincResize::resize_plane_c<uint8_t, 1, 0>;
                 break;
             case 2:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 1, 1> : &JincResize::resize_plane_avx512<uint16_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 1, 1> : &JincResize::resize_plane_avx512<uint16_t, 1, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 1, 1> : &JincResize::resize_plane_avx2<uint16_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 1, 1> : &JincResize::resize_plane_avx2<uint16_t, 1, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 1, 1> : &JincResize::resize_plane_sse41<uint16_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 1, 1> : &JincResize::resize_plane_sse41<uint16_t, 1, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 1, 1> : &JincResize::resize_plane_c<uint16_t, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 1, 1> : &JincResize::resize_plane_c<uint16_t, 1, 0>;
                 break;
             default:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 1, 1> : &JincResize::resize_plane_avx512<float, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 1, 1> : &JincResize::resize_plane_avx512<float, 1, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 1, 1> : &JincResize::resize_plane_avx2<float, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 1, 1> : &JincResize::resize_plane_avx2<float, 1, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 1, 1> : &JincResize::resize_plane_sse41<float, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 1, 1> : &JincResize::resize_plane_sse41<float, 1, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 1, 1> : &JincResize::resize_plane_c<float, 1, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 1, 1> : &JincResize::resize_plane_c<float, 1, 0>;
                 break;
         }
     }
     else
     {
-        switch (vi.ComponentSize())
+        switch (avs_component_size(vi))
         {
             case 1:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 0, 1> : &JincResize::resize_plane_avx512<uint8_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 0, 1> : &JincResize::resize_plane_avx512<uint8_t, 0, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 0, 1> : &JincResize::resize_plane_avx2<uint8_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 0, 1> : &JincResize::resize_plane_avx2<uint8_t, 0, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 0, 1> : &JincResize::resize_plane_sse41<uint8_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 0, 1> : &JincResize::resize_plane_sse41<uint8_t, 0, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 0, 1> : &JincResize::resize_plane_c<uint8_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 0, 1> : &JincResize::resize_plane_c<uint8_t, 0, 0>;
                 break;
             case 2:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 0, 1> : &JincResize::resize_plane_avx512<uint16_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 0, 1> : &JincResize::resize_plane_avx512<uint16_t, 0, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 0, 1> : &JincResize::resize_plane_avx2<uint16_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 0, 1> : &JincResize::resize_plane_avx2<uint16_t, 0, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 0, 1> : &JincResize::resize_plane_sse41<uint16_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 0, 1> : &JincResize::resize_plane_sse41<uint16_t, 0, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 0, 1> : &JincResize::resize_plane_c<uint16_t, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 0, 1> : &JincResize::resize_plane_c<uint16_t, 0, 0>;
                 break;
             default:
                 if (avx512)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 0, 1> : &JincResize::resize_plane_avx512<float, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 0, 1> : &JincResize::resize_plane_avx512<float, 0, 0>;
                 else if (avx2)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 0, 1> : &JincResize::resize_plane_avx2<float, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 0, 1> : &JincResize::resize_plane_avx2<float, 0, 0>;
                 else if (sse41)
-                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 0, 1> : &JincResize::resize_plane_sse41<float, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 0, 1> : &JincResize::resize_plane_sse41<float, 0, 0>;
                 else
-                    process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 0, 1> : &JincResize::resize_plane_c<float, 0, 0>;
+                    d->process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 0, 1> : &JincResize::resize_plane_c<float, 0, 0>;
                 break;
         }
     }
+
+    AVS_Value v = avs_new_value_clip(clip);
+
+    fi->user_data = reinterpret_cast<void*>(d);
+    fi->get_frame = JincResize_GetFrame;
+    fi->set_cache_hints = set_cache_hints_JincResize;
+    fi->free_filter = free_JincResize;
+
+    avs_release_clip(clip);
+
+    return v;
 }
 
-JincResize::~JincResize()
+class Arguments
 {
-    for (int i = 0; i < static_cast<int>(out.size()); ++i)
+    AVS_Value m_args[12];
+    const char* m_arg_names[12];
+    int m_idx;
+
+public:
+    Arguments() : m_args{}, m_arg_names{}, m_idx{} {}
+
+    void add(AVS_Value arg, const char* arg_name = nullptr)
     {
-        delete_coeff_table(out[i]);
-        delete out[i];
+        m_args[m_idx] = arg;
+        m_arg_names[m_idx] = arg_name;
+        ++m_idx;
     }
 
-    delete[] init_lut->lut;
-    delete init_lut;
-}
+    AVS_Value args() { return avs_new_value_array(m_args, m_idx); };
 
-PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
+    const char** arg_names() { return m_arg_names; };
+};
+
+static void resizer(const AVS_Value& args, Arguments* out_args, int src_left_idx = 3)
 {
-    PVideoFrame src = child->GetFrame(n, env);
-    PVideoFrame dst = (has_at_least_v8) ? env->NewVideoFrameP(vi, &src) : env->NewVideoFrame(vi);
+    out_args->add(avs_array_elt(args, 0));
+    out_args->add(avs_array_elt(args, 1));
+    out_args->add(avs_array_elt(args, 2));
 
-    (this->*process_frame)(src, dst, env);
-
-    if (has_at_least_v8 && (vi.Is420() || vi.Is422() || vi.IsYV411()))
-    {
-        if (cplace == "mpeg2")
-            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 0, 0);
-        else if (cplace == "mpeg1")
-            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 1, 0);
-        else
-            env->propSetInt(env->getFramePropsRW(dst), "_ChromaLocation", 2, 0);
-    }
-
-    return dst;
-}
-
-AVSValue __cdecl Create_JincResize(AVSValue args, void* user_data, IScriptEnvironment* env)
-{
-    const VideoInfo& vi = args[0].AsClip()->GetVideoInfo();
-
-    return new JincResize(
-        args[0].AsClip(),
-        args[1].AsInt(),
-        args[2].AsInt(),
-        args[3].AsFloatf(0.0f),
-        args[4].AsFloatf(0.0f),
-        args[5].AsFloatf(static_cast<float>(vi.width)),
-        args[6].AsFloatf(static_cast<float>(vi.height)),
-        args[7].AsInt(256),
-        args[8].AsInt(256),
-        args[9].AsInt(3),
-        args[10].AsFloatf(0.0f),
-        args[11].AsString(""),
-        args[12].AsInt(0),
-        args[13].AsInt(-1),
-        env);
-}
-
-static void resizer(const AVSValue& args, Arguments* out_args, int src_left_idx = 3)
-{
-    out_args->add(args[0]);
-    out_args->add(args[1]);
-    out_args->add(args[2]);
-
-    if (args[src_left_idx + 0].Defined())
-        out_args->add(args[src_left_idx + 0], "src_left");
-    if (args[src_left_idx + 1].Defined())
-        out_args->add(args[src_left_idx + 1], "src_top");
-    if (args[src_left_idx + 2].Defined())
-        out_args->add(args[src_left_idx + 2], "src_width");
-    if (args[src_left_idx + 3].Defined())
-        out_args->add(args[src_left_idx + 3], "src_height");
-    if (args[src_left_idx + 4].Defined())
-        out_args->add(args[src_left_idx + 4], "quant_x");
-    if (args[src_left_idx + 5].Defined())
-        out_args->add(args[src_left_idx + 5], "quant_y");
-    if (args[src_left_idx + 6].Defined())
-        out_args->add(args[src_left_idx + 6], "cplace");
-    if (args[src_left_idx + 7].Defined())
-        out_args->add(args[src_left_idx + 7], "threads");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 0)))
+        out_args->add(avs_array_elt(args, src_left_idx + 0), "src_left");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 1)))
+        out_args->add(avs_array_elt(args, src_left_idx + 1), "src_top");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 2)))
+        out_args->add(avs_array_elt(args, src_left_idx + 2), "src_width");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 3)))
+        out_args->add(avs_array_elt(args, src_left_idx + 3), "src_height");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 4)))
+        out_args->add(avs_array_elt(args, src_left_idx + 4), "quant_x");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 5)))
+        out_args->add(avs_array_elt(args, src_left_idx + 5), "quant_y");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 6)))
+        out_args->add(avs_array_elt(args, src_left_idx + 6), "cplace");
+    if (avs_defined(avs_array_elt(args, src_left_idx + 7)))
+        out_args->add(avs_array_elt(args, src_left_idx + 7), "threads");
 }
 
 template <int taps>
-AVSValue __cdecl resizer_jincresize(AVSValue args, void* user_data, IScriptEnvironment* env)
+static AVS_Value AVSC_CC resizer_jincresize(AVS_ScriptEnvironment* env, AVS_Value args, void* param)
 {
     Arguments mapped_args;
 
     resizer(args, &mapped_args);
-    mapped_args.add(taps, "tap");
+    mapped_args.add(avs_new_value_int(taps), "tap");
 
-    return env->Invoke("JincResize", mapped_args.args(), mapped_args.arg_names()).AsClip();
+    return avs_invoke(env, "JincResize", mapped_args.args(), mapped_args.arg_names());
 }
 
-const AVS_Linkage* AVS_linkage;
-
-extern "C" __declspec(dllexport)
-const char* __stdcall AvisynthPluginInit3(IScriptEnvironment * env, const AVS_Linkage* const vectors)
+const char* AVSC_CC avisynth_c_plugin_init(AVS_ScriptEnvironment* env)
 {
-    AVS_linkage = vectors;
-
-    env->AddFunction("JincResize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[tap]i[blur]f[cplace]s[threads]i[opt]i", Create_JincResize, 0);
-
-    env->AddFunction("Jinc36Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<3>, 0);
-    env->AddFunction("Jinc64Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<4>, 0);
-    env->AddFunction("Jinc144Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<6>, 0);
-    env->AddFunction("Jinc256Resize", "cii[src_left]f[src_top]f[src_width]f[src_height]f[quant_x]i[quant_y]i[cplace]s[threads]i", resizer_jincresize<8>, 0);
+    avs_add_function(env, "JincResize",
+        "c"
+        "i"
+        "i"
+        "[src_left]f"
+        "[src_top]f"
+        "[src_width]f"
+        "[src_height]f"
+        "[quant_x]i"
+        "[quant_y]i"
+        "[tap]i"
+        "[blur]f"
+        "[cplace]s"
+        "[threads]i"
+        "[opt]i", Create_JincResize, 0);
+    avs_add_function(env, "Jinc36Resize",
+        "c"
+        "i"
+        "i"
+        "[src_left]f"
+        "[src_top]f"
+        "[src_width]f"
+        "[src_height]f"
+        "[quant_x]i"
+        "[quant_y]i"
+        "[cplace]s"
+        "[threads]i", resizer_jincresize<3>, 0);
+    avs_add_function(env, "Jinc64Resize",
+        "c"
+        "i"
+        "i"
+        "[src_left]f"
+        "[src_top]f"
+        "[src_width]f"
+        "[src_height]f"
+        "[quant_x]i"
+        "[quant_y]i"
+        "[cplace]s"
+        "[threads]i", resizer_jincresize<4>, 0);
+    avs_add_function(env, "Jinc144Resize",
+        "c"
+        "i"
+        "i"
+        "[src_left]f"
+        "[src_top]f"
+        "[src_width]f"
+        "[src_height]f"
+        "[quant_x]i"
+        "[quant_y]i"
+        "[cplace]s"
+        "[threads]i", resizer_jincresize<6>, 0);
+    avs_add_function(env, "Jinc256Resize",
+        "c"
+        "i"
+        "i"
+        "[src_left]f"
+        "[src_top]f"
+        "[src_width]f"
+        "[src_height]f"
+        "[quant_x]i"
+        "[quant_y]i"
+        "[cplace]s"
+        "[threads]i", resizer_jincresize<8>, 0);
 
     return "JincResize";
 }
