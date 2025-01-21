@@ -1,11 +1,11 @@
-#include <vector>
 #include <cmath>
 
 #include "JincRessize.h"
 
 AVS_FORCEINLINE void* aligned_malloc(size_t size, size_t align)
 {
-    void* result = [&]() {
+    void* result = [&]()
+    {
 #ifdef _MSC_VER
         return _aligned_malloc(size, align);
 #else
@@ -35,37 +35,37 @@ static constexpr double M_PI = 3.14159265358979323846;
 // Taylor series coefficients of 2*BesselJ1(pi*x)/(pi*x) as (x^2) -> 0
 static constexpr double jinc_taylor_series[31] =
 {
-     1.0,
+    1.0,
     -1.23370055013616982735431137,
-     0.507339015802096027273126733,
+    0.507339015802096027273126733,
     -0.104317403816764804365258186,
-     0.0128696438477519721233840271,
+    0.0128696438477519721233840271,
     -0.00105848577966854543020422691,
-     6.21835470803998638484476598e-05,
+    6.21835470803998638484476598e-05,
     -2.73985272294670461142756204e-06,
-     9.38932725442064547796003405e-08,
+    9.38932725442064547796003405e-08,
     -2.57413737759717407304931036e-09,
-     5.77402672521402031756429343e-11,
+    5.77402672521402031756429343e-11,
     -1.07930605263598241754572977e-12,
-     1.70710316782347356046974552e-14,
+    1.70710316782347356046974552e-14,
     -2.31434518382749184406648762e-16,
-     2.71924659665997312120515390e-18,
+    2.71924659665997312120515390e-18,
     -2.79561335187943028518083529e-20,
-     2.53599244866299622352138464e-22,
+    2.53599244866299622352138464e-22,
     -2.04487273140961494085786452e-24,
-     1.47529860450204338866792475e-26,
+    1.47529860450204338866792475e-26,
     -9.57935105257523453155043307e-29,
-     5.62764317309979254140393917e-31,
+    5.62764317309979254140393917e-31,
     -3.00555258814860366342363867e-33,
-     1.46559362903641161989338221e-35,
+    1.46559362903641161989338221e-35,
     -6.55110024064596600335624426e-38,
-     2.69403199029404093412381643e-40,
+    2.69403199029404093412381643e-40,
     -1.02265499954159964097119923e-42,
-     3.59444454568084324694180635e-45,
+    3.59444454568084324694180635e-45,
     -1.17313973900539982313119019e-47,
-     3.56478606255557746426034301e-50,
+    3.56478606255557746426034301e-50,
     -1.01100655781438313239513538e-52,
-     2.68232117541264485328658605e-55
+    2.68232117541264485328658605e-55
 };
 
 static constexpr double jinc_zeros[16] =
@@ -305,9 +305,6 @@ static void init_coeff_table(EWAPixelCoeff* out, int quantize_x, int quantize_y,
 
 static void delete_coeff_table(EWAPixelCoeff* out)
 {
-    if (out == nullptr)
-        return;
-
     aligned_free(out->factor);
     delete[] out->meta;
     delete[] out->factor_map;
@@ -327,7 +324,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     const float filter_support = max(filter_support_x, filter_support_y);
     const int filter_size = max(static_cast<int>(ceil(filter_support_x * 2.0)), static_cast<int>(ceil(filter_support_y * 2.0)));
 
-    const float start_x = static_cast<float>(crop_left + (crop_width / dst_width - 1.0 ) / 2.0);
+    const float start_x = static_cast<float>(crop_left + (crop_width / dst_width - 1.0) / 2.0);
 
     const float x_step = static_cast<float>(crop_width / dst_width);
     const float y_step = static_cast<float>(crop_height / dst_height);
@@ -483,7 +480,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 }
 
 /* Planar resampling with coeff table */
-template<typename T, int thr>
+template<typename T, int thr, int subsampled>
 void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvironment* env)
 {
     const int planes_y[4] = { PLANAR_Y, PLANAR_U, PLANAR_V, PLANAR_A };
@@ -499,24 +496,32 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
         const int dst_height = dst->GetHeight(plane);
         const T* srcp = reinterpret_cast<const T*>(src->GetReadPtr(plane));
 
+        EWAPixelCoeff* out = [&]()
+        {
+            if constexpr (subsampled)
+                return (i) ? (i == 3) ? JincResize::out[0] : JincResize::out[1] : JincResize::out[0];
+            else
+                return JincResize::out[0];
+        }();
+
         auto loop = [&](int y)
         {
             T* __restrict dstp = reinterpret_cast<T*>(dst->GetWritePtr(plane)) + static_cast<int64_t>(y) * dst_stride;
 
             for (int x = 0; x < dst_width; ++x)
             {
-                EWAPixelCoeffMeta* meta = out[i]->meta + static_cast<int64_t>(y) * dst_width + x;
+                EWAPixelCoeffMeta* meta = out->meta + static_cast<int64_t>(y) * dst_width + x;
                 const T* src_ptr = srcp + meta->start_y * static_cast<int64_t>(src_stride) + meta->start_x;
-                const float* coeff_ptr = out[i]->factor + meta->coeff_meta;
+                const float* coeff_ptr = out->factor + meta->coeff_meta;
 
                 float result = 0.f;
 
-                for (int ly = 0; ly < out[i]->filter_size; ++ly)
+                for (int ly = 0; ly < out->filter_size; ++ly)
                 {
-                    for (int lx = 0; lx < out[i]->filter_size; ++lx)
+                    for (int lx = 0; lx < out->filter_size; ++lx)
                         result += src_ptr[lx] * coeff_ptr[lx];
 
-                    coeff_ptr += out[i]->coeff_stride;
+                    coeff_ptr += out->coeff_stride;
                     src_ptr += src_stride;
                 }
 
@@ -544,7 +549,7 @@ void JincResize::resize_plane_c(PVideoFrame& src, PVideoFrame& dst, IScriptEnvir
 
 JincResize::JincResize(PClip _child, int target_width, int target_height, double crop_left, double crop_top, double crop_width, double crop_height, int quant_x, int quant_y, int tap, double blur,
     std::string cplace_, int threads, int opt, IScriptEnvironment* env)
-    : GenericVideoFilter(_child), cplace(cplace_), out{ nullptr, nullptr, nullptr }
+    : GenericVideoFilter(_child), cplace(cplace_)
 {
     if (!vi.IsPlanar())
         env->ThrowError("JincResize: clip must be in planar format.");
@@ -619,7 +624,8 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
     constexpr int samples = 1024;  // should be a multiple of 4
     init_lut = new Lut();
     init_lut->InitLut(samples, radius, blur);
-    planecount = min(vi.NumComponents(), 3);
+    planecount = vi.NumComponents();
+    bool subsampled = false;
 
     try
     {
@@ -627,43 +633,42 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         {
             if (vi.Is444() || vi.IsRGB())
             {
-                for (int i = 0; i < planecount; ++i)
-                {
-                    out[i] = new EWAPixelCoeff();
-                    generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
-                }
+                out.emplace_back(new EWAPixelCoeff());
+                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
+                    radius, crop_left, crop_top, crop_width, crop_height);
             }
             else
             {
+                for (int i = 0; i < 2; ++i)
+                    out.emplace_back(new EWAPixelCoeff());
+
+                subsampled = true;
                 const int sub_w = vi.GetPlaneWidthSubsampling(PLANAR_U);
                 const int sub_h = vi.GetPlaneHeightSubsampling(PLANAR_U);
                 const double div_w = 1 << sub_w;
                 const double div_h = 1 << sub_h;
 
-                const double crop_left_uv = (cplace == "mpeg2" || cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_width) / target_width) + crop_left) / div_w : crop_left / div_w;
-                const double crop_top_uv = (cplace == "topleft") ? (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
+                const double crop_left_uv = (cplace == "mpeg2" || cplace == "topleft") ?
+                    (0.5 * (1.0 - static_cast<double>(src_width) / target_width) + crop_left) / div_w : crop_left / div_w;
+                const double crop_top_uv = (cplace == "topleft") ?
+                    (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
 
-                for (int i = 0; i < planecount; ++i)
-                {
-                    out[i] = new EWAPixelCoeff();
-
-                    if (i == 0)
-                        generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
-                    else
-                        generate_coeff_table_c(init_lut, out[i], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
-                            target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
-                }
+                generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
+                    radius, crop_left, crop_top, crop_width, crop_height);
+                generate_coeff_table_c(init_lut, out[1], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
+                    target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
             }
         }
         else
         {
             out[0] = new EWAPixelCoeff();
-            generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius, crop_left, crop_top, crop_width, crop_height);
+            generate_coeff_table_c(init_lut, out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius,
+                crop_left, crop_top, crop_width, crop_height);
         }
     }
     catch (const std::exception&)
     {
-        for (int i = 0; i < planecount; ++i)
+        for (int i = 0; i < out.size(); ++i)
         {
             delete_coeff_table(out[i]);
             delete out[i];
@@ -685,33 +690,33 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         {
             case 1:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<uint8_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 1, 1> : &JincResize::resize_plane_avx512<uint8_t, 1, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<uint8_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 1, 1> : &JincResize::resize_plane_avx2<uint8_t, 1, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<uint8_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 1, 1> : &JincResize::resize_plane_sse41<uint8_t, 1, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<uint8_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 1, 1> : &JincResize::resize_plane_c<uint8_t, 1, 0>;
                 break;
             case 2:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<uint16_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 1, 1> : &JincResize::resize_plane_avx512<uint16_t, 1, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<uint16_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 1, 1> : &JincResize::resize_plane_avx2<uint16_t, 1, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<uint16_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 1, 1> : &JincResize::resize_plane_sse41<uint16_t, 1, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<uint16_t, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 1, 1> : &JincResize::resize_plane_c<uint16_t, 1, 0>;
                 break;
             default:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<float, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 1, 1> : &JincResize::resize_plane_avx512<float, 1, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<float, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 1, 1> : &JincResize::resize_plane_avx2<float, 1, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<float, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 1, 1> : &JincResize::resize_plane_sse41<float, 1, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<float, 1>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 1, 1> : &JincResize::resize_plane_c<float, 1, 0>;
                 break;
         }
     }
@@ -721,33 +726,33 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
         {
             case 1:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<uint8_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint8_t, 0, 1> : &JincResize::resize_plane_avx512<uint8_t, 0, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<uint8_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint8_t, 0, 1> : &JincResize::resize_plane_avx2<uint8_t, 0, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<uint8_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint8_t, 0, 1> : &JincResize::resize_plane_sse41<uint8_t, 0, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<uint8_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint8_t, 0, 1> : &JincResize::resize_plane_c<uint8_t, 0, 0>;
                 break;
             case 2:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<uint16_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<uint16_t, 0, 1> : &JincResize::resize_plane_avx512<uint16_t, 0, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<uint16_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<uint16_t, 0, 1> : &JincResize::resize_plane_avx2<uint16_t, 0, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<uint16_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<uint16_t, 0, 1> : &JincResize::resize_plane_sse41<uint16_t, 0, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<uint16_t, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<uint16_t, 0, 1> : &JincResize::resize_plane_c<uint16_t, 0, 0>;
                 break;
             default:
                 if (avx512)
-                    process_frame = &JincResize::resize_plane_avx512<float, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx512<float, 0, 1> : &JincResize::resize_plane_avx512<float, 0, 0>;
                 else if (avx2)
-                    process_frame = &JincResize::resize_plane_avx2<float, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_avx2<float, 0, 1> : &JincResize::resize_plane_avx2<float, 0, 0>;
                 else if (sse41)
-                    process_frame = &JincResize::resize_plane_sse41<float, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_sse41<float, 0, 1> : &JincResize::resize_plane_sse41<float, 0, 0>;
                 else
-                    process_frame = &JincResize::resize_plane_c<float, 0>;
+                    process_frame = (subsampled) ? &JincResize::resize_plane_c<float, 0, 1> : &JincResize::resize_plane_c<float, 0, 0>;
                 break;
         }
     }
@@ -755,14 +760,14 @@ JincResize::JincResize(PClip _child, int target_width, int target_height, double
 
 JincResize::~JincResize()
 {
-    delete[] init_lut->lut;
-    delete init_lut;
-
-    for (int i = 0; i < planecount; ++i)
+    for (int i = 0; i < out.size(); ++i)
     {
         delete_coeff_table(out[i]);
         delete out[i];
     }
+
+    delete[] init_lut->lut;
+    delete init_lut;
 }
 
 PVideoFrame JincResize::GetFrame(int n, IScriptEnvironment* env)
