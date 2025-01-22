@@ -113,3 +113,12 @@ cd AviSynth-JincResize
 cmake -B build -G Ninja
 ninja -C build
 ```
+
+Example of building on Windows:
+
+1. Open x64 Native Tools Command Prompt for VS xxxx.
+2. Type - `set LIB=%LIB%;path_to_avisynth.lib`
+3. Navigate to the jincresize source folder.
+4. Type - `cmake -B name_of_the_folder_containing_building_files -DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=path_to_avisynth_c.h`
+
+By default Visual Studio solution files will be created.
