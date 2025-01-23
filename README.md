@@ -114,7 +114,7 @@ cmake -B build -G Ninja
 ninja -C build
 ```
 
-Example of building on Windows:
+Example of building on Windows with MSVC:
 
 1. Open x64 Native Tools Command Prompt for VS xxxx.
 2. Type - `set LIB=%LIB%;path_to_avisynth.lib`
@@ -122,3 +122,10 @@ Example of building on Windows:
 4. Type - `cmake -B name_of_the_folder_containing_building_files -DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=path_to_avisynth_c.h`
 
 By default Visual Studio solution files will be created.
+
+Example of building on Windows with Mingw:
+
+1. Open UCRT64/MINGW64 shell.
+2. Type - `export LIBRARY_PATH=$LIBRARY_PATH:path_to_the_avs_lib`
+3. Navigate to the jincresize source folder.
+4. Type - `cmake -B name_of_the_folder_containing_building_files -DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=path_to_avisynth_c.h`
