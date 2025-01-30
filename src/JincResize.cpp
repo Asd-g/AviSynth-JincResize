@@ -467,9 +467,12 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
     // Copy from tmp_array to real array
     const int tmp_array_size = tmp_array.size();
-    out->factor = static_cast<float*>(aligned_malloc(tmp_array_size * sizeof(float), 64)); // aligned to cache line
+    const int aligned_size = tmp_array_size * sizeof(float) + 4096; // try to add one 4K page for safety ?
+    out->factor = static_cast<float*>(aligned_malloc(aligned_size, 64)); // aligned to cache line
     if (out->factor)
         memcpy(out->factor, &tmp_array[0], tmp_array_size * sizeof(float));
+    else
+        throw std::invalid_argument("Can not allocate memory");
 }
 
 /* Planar resampling with coeff table */
