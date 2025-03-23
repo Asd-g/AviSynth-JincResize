@@ -7,7 +7,7 @@
 #endif
 
 template <typename T, int thr, int subsampled>
-void JincResize::resize_plane_avx2(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi)
+void JincResize::resize_plane_avx2(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi)
 {
     const int planes_y[4] = { AVS_PLANAR_Y, AVS_PLANAR_U, AVS_PLANAR_V, AVS_PLANAR_A };
     const int planes_r[4] = { AVS_PLANAR_G, AVS_PLANAR_B, AVS_PLANAR_R, AVS_PLANAR_A };
@@ -115,18 +115,18 @@ void JincResize::resize_plane_avx2(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS
     }
 }
 
-template void JincResize::resize_plane_avx2<uint8_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<uint16_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<float, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint8_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint16_t, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<float, 0, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_avx2<uint8_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<uint16_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<float, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint8_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint16_t, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<float, 1, 1>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_avx2<uint8_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<uint16_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<float, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint8_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint16_t, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<float, 0, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
 
-template void JincResize::resize_plane_avx2<uint8_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<uint16_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
-template void JincResize::resize_plane_avx2<float, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint8_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<uint16_t, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);
+template void JincResize::resize_plane_avx2<float, 1, 0>(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi);

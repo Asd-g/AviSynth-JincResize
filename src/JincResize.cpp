@@ -419,8 +419,8 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
                     for (int lx = 0; lx < filter_size; ++lx)
                     {
                         // Euclidean distance to sampling pixel
-                        const double dx = (clamp(is_border ? xpos : quantized_xpos, 0.f, src_width - 1.f) - window_x) * filter_step_x;
-                        const double dy = (clamp(is_border ? ypos : quantized_ypos, 0.f, src_height - 1.f) - window_y) * filter_step_y;
+                        const double dx = (clamp(is_border ? xpos : quantized_xpos, 0.f, static_cast<float>(src_width - 1)) - window_x) * filter_step_x;
+                        const double dy = (clamp(is_border ? ypos : quantized_ypos, 0.f, static_cast<float>(src_height - 1)) - window_y) * filter_step_y;
 
                         int index = static_cast<int>(llround((samples - 1) * (dx * dx + dy * dy) / radius2 + DOUBLE_ROUND_MAGIC_NUMBER));
 
@@ -474,7 +474,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
 
 /* Planar resampling with coeff table */
 template<typename T, int thr, int subsampled>
-void JincResize::resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_ScriptEnvironment* env, AVS_VideoInfo* vi)
+void JincResize::resize_plane_c(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi)
 {
     const int planes_y[4] = { AVS_PLANAR_Y, AVS_PLANAR_U, AVS_PLANAR_V, AVS_PLANAR_A };
     const int planes_r[4] = { AVS_PLANAR_G, AVS_PLANAR_B, AVS_PLANAR_R, AVS_PLANAR_A };
@@ -552,7 +552,7 @@ static AVS_VideoFrame* AVSC_CC JincResize_GetFrame(AVS_FilterInfo* fi, int n)
 
     AVS_VideoFrame* dst = (d->has_at_least_v8) ? avs_new_video_frame_p(env, vi, src) : avs_new_video_frame(env, vi);
 
-    (d->*d->process_frame)(src, dst, env, vi);
+    (d->*d->process_frame)(src, dst, vi);
 
     if (d->has_at_least_v8 && (avs_is_420(vi) || avs_is_422(vi) || avs_is_yv411(vi)))
     {
