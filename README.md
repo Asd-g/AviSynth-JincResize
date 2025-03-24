@@ -17,7 +17,7 @@ NOTE: The 32-bit version is not supported. If you still want to use it keep in m
 ### Usage:
 
 ```
-JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", string "cplace", int "threads", int "opt")
+JincResize (clip, int target_width, int target_height, float "src_left", float "src_top", float "src_width", float "src_height", int "quant_x", int "quant_y", int "tap", float "blur", string "cplace", int "threads", int "opt", int "initial_capacity", float "initial_factor")
 ```
 
 ##### There are 4 additional functions:
@@ -32,70 +32,83 @@ Jinc36Resize / Jinc64Resize / Jinc144Resize / Jinc256Resize (clip, int target_wi
 
 ### Parameters:
 
-- clip\
+- clip<br>
     A clip to process. All planar formats are supported.
 
-- target_width\
+- target_width<br>
     The width of the output.
 
-- target_height\
+- target_height<br>
     The height of the output.
 
-- src_left\
-    Cropping of the left edge.\
+- src_left<br>
+    Cropping of the left edge.<br>
     Default: 0.0.
 
-- src_top\
-    Cropping of the top edge.\
+- src_top<br>
+    Cropping of the top edge.<br>
     Default: 0.0.
 
-- src_width\
-    If > 0.0 it sets the width of the clip before resizing.\
-    If <= 0.0 it sets the cropping of the right edges before resizing.\
+- src_width<br>
+    If > 0.0 it sets the width of the clip before resizing.<br>
+    If <= 0.0 it sets the cropping of the right edges before resizing.<br>
     Default: Source width.
 
-- src_height\
-    If > 0.0 it sets the height of the clip before resizing.\
-    If <= 0.0 it sets the cropping of the bottom edges before resizing.\
+- src_height<br>
+    If > 0.0 it sets the height of the clip before resizing.<br>
+    If <= 0.0 it sets the cropping of the bottom edges before resizing.<br>
     Default: Source height.
 
-- quant_x, quant_y\
-    Controls the sub-pixel quantization.\
-    Must be between 1 and 256.\
+- quant_x, quant_y<br>
+    Controls the sub-pixel quantization.<br>
+    Must be between 1 and 256.<br>
     Default: 256.
 
-- tap (JincResize only)\
-    Corresponding to different zero points of Jinc function.\
-    Must be between 1 and 16.\
+- tap (JincResize only)<br>
+    Corresponding to different zero points of Jinc function.<br>
+    Must be between 1 and 16.<br>
     Default: 3.
 
-- blur (JincResize only)\
-    Blur processing, it can reduce side effects.\
-    To achieve blur, the value should be less than 1.0.\
+- blur (JincResize only)<br>
+    Blur processing, it can reduce side effects.<br>
+    To achieve blur, the value should be less than 1.0.<br>
     Default: 1.0.
 
-- threads\
-    Whether to use maximum logical processors.\
-    0: Maximum logical processors are used.\
-    1: Only one thread is used.\
+- threads<br>
+    Whether to use maximum logical processors.<br>
+    0: Maximum logical processors are used.<br>
+    1: Only one thread is used.<br>
     Default: 0.
 
-- cplace\
-    The location of the chroma samples.\
-    "MPEG1": Chroma samples are located on the center of each group of 4 pixels.\
-    "MPEG2": Chroma samples are located on the left pixel column of the group.\
-    "topleft": Chroma samples are located on the left pixel column and the first row of the group.\
+- cplace<br>
+    The location of the chroma samples.<br>
+    "MPEG1": Chroma samples are located on the center of each group of 4 pixels.<br>
+    "MPEG2": Chroma samples are located on the left pixel column of the group.<br>
+    "topleft": Chroma samples are located on the left pixel column and the first row of the group.<br>
     Default: If frame properties are supported and frame property "_ChromaLocation" exists - "_ChromaLocation" value of the first frame is used.
     If frame properties aren't supported or there is no property "_ChromaLocation" - "MPEG2".
 
-- opt (JincResize only)\
-    Sets which cpu optimizations to use.\
-    -1: Auto-detect without AVX-512.\
-    0: Use C++ code.\
-    1: Use SSE4.1 code.\
-    2: Use AVX2 code.\
-    3: Use AVX-512 code.\
+- opt (JincResize only)<br>
+    Sets which cpu optimizations to use.<br>
+    -1: Auto-detect without AVX-512.<br>
+    0: Use C++ code.<br>
+    1: Use SSE4.1 code.<br>
+    2: Use AVX2 code.<br>
+    3: Use AVX-512 code.<br>
     Default: -1.
+
+- initial_capacity (JincResize only)<br>
+    Initial memory allocation size.<br>
+    Lower size forces more further memory reallocating that leads to initial slower startup but avoids excessive memory allocation.<br>
+    Must be greater than 0.<br>
+    Default: Max(target_width * target_height, src_width * src_height).
+
+- initial_factor (JincResize only)<br>
+    The initial factor used for the first memory reallocation.<br>
+    After the first memory reallocation the factor starts to lower for the next reallocations.<br>
+    `initial_factor=1` ensures that the next memory allocation is the minimal possible.<br>
+    Must be equal to or greater than 1.0.<br>
+    Default: 1.5.
 
 ### Building:
 
@@ -108,7 +121,7 @@ Requirements:
 ```
 
 ```
-git clone https://github.com/Asd-g/AviSynth-JincResize && \
+git clone https://github.com/Asd-g/AviSynth-JincResize && <br>
 cd AviSynth-JincResize
 cmake -B build -G Ninja
 ninja -C build

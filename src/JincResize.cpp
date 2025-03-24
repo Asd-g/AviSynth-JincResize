@@ -29,6 +29,18 @@ AVS_FORCEINLINE void aligned_free(void* ptr)
 #endif
 }
 
+static AVS_FORCEINLINE unsigned portable_clz(size_t x)
+{
+#if defined(_WIN32) && (defined(_M_IX86) || defined(_M_X64))
+    unsigned long index;
+    return (_BitScanReverse(&index, static_cast<unsigned long>(x))) ? (31 - index) : 32;
+#elif defined(_WIN32) && defined(_M_ARM64)
+    return static_cast<unsigned>(__clz(static_cast<unsigned long>(x)));
+#else
+    return (x == 0) ? 32 : __builtin_clz(static_cast<unsigned>(x));
+#endif
+}
+
 #ifndef M_PI // GCC seems to have it
 static constexpr double M_PI = 3.14159265358979323846;
 #endif
@@ -281,10 +293,7 @@ static void init_coeff_table(EWAPixelCoeff* out, int quantize_x, int quantize_y,
     out->meta = new EWAPixelCoeffMeta[static_cast<int64_t>(dst_width) * dst_height];
 
     // Alocate factor map
-    if (quantize_x > 0 && quantize_y > 0)
-        out->factor_map = new int[static_cast<int64_t>(quantize_x) * quantize_y];
-    else
-        out->factor_map = nullptr;
+    out->factor_map = new int[static_cast<int64_t>(quantize_x) * quantize_y];
 
     // This will be reserved to exact size in coff generating procedure
     out->factor = nullptr;
@@ -303,13 +312,42 @@ static void delete_coeff_table(EWAPixelCoeff* out)
     delete[] out->factor_map;
 }
 
-/* Coefficient table generation */
-static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x, int quantize_y,
-    int samples, int src_width, int src_height, int dst_width, int dst_height, double radius,
-    double crop_left, double crop_top, double crop_width, double crop_height)
+struct generate_coeff_params
 {
-    const double filter_step_x = min(static_cast<double>(dst_width) / crop_width, 1.0);
-    const double filter_step_y = min(static_cast<double>(dst_height) / crop_height, 1.0);
+    Lut* func;
+    EWAPixelCoeff* out;
+    int quantize_x;
+    int quantize_y;
+    int samples;
+    int src_width;
+    int src_height;
+    int dst_width;
+    int dst_height;
+    double radius;
+    double crop_left;
+    double crop_top;
+    double crop_width;
+    double crop_height;
+    int initial_capacity;
+    double initial_factor;
+};
+
+/* Coefficient table generation */
+static void generate_coeff_table_c(const generate_coeff_params& params)
+{
+    Lut* func = params.func;
+    EWAPixelCoeff* out = params.out;
+    int quantize_x = params.quantize_x;
+    int quantize_y = params.quantize_y;
+    int samples = params.samples;
+    int src_width = params.src_width;
+    int src_height = params.src_height;
+    int dst_width = params.dst_width;
+    int dst_height = params.dst_height;
+    double radius = params.radius;
+
+    const double filter_step_x = min(static_cast<double>(dst_width) / params.crop_width, 1.0);
+    const double filter_step_y = min(static_cast<double>(dst_height) / params.crop_height, 1.0);
 
     const float filter_support_x = static_cast<float>(radius / filter_step_x);
     const float filter_support_y = static_cast<float>(radius / filter_step_y);
@@ -317,19 +355,26 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     const float filter_support = max(filter_support_x, filter_support_y);
     const int filter_size = max(static_cast<int>(ceil(filter_support_x * 2.0)), static_cast<int>(ceil(filter_support_y * 2.0)));
 
-    const float start_x = static_cast<float>(crop_left + (crop_width / dst_width - 1.0) / 2.0);
+    const float start_x = static_cast<float>(params.crop_left + (params.crop_width / dst_width - 1.0) / 2.0);
 
-    const float x_step = static_cast<float>(crop_width / dst_width);
-    const float y_step = static_cast<float>(crop_height / dst_height);
+    const float x_step = static_cast<float>(params.crop_width / dst_width);
+    const float y_step = static_cast<float>(params.crop_height / dst_height);
 
     float xpos = start_x;
-    float ypos = static_cast<float>(crop_top + (crop_height - dst_height) / (dst_height * static_cast<int64_t>(2)));
+    float ypos = static_cast<float>(params.crop_top + (params.crop_height - dst_height) / (dst_height * static_cast<int64_t>(2)));
 
     // Initialize EWAPixelCoeff data structure
     init_coeff_table(out, quantize_x, quantize_y, filter_size, dst_width, dst_height);
 
-    std::vector<float> tmp_array;
+    size_t tmp_array_capacity = params.initial_capacity;
+    float* tmp_array = static_cast<float*>(aligned_malloc(tmp_array_capacity * sizeof(float), 64));
+    if (!tmp_array)
+        throw "JincResize: failed to allocate tmp_array.";
+    size_t tmp_array_size = 0;
     int tmp_array_top = 0;
+    unsigned base_clz = portable_clz(tmp_array_capacity);
+    const double initial_growth_factor = params.initial_factor;
+    const double radius2 = radius * radius;
 
     // Use to advance the coeff pointer
     const int coeff_per_pixel = out->coeff_stride * filter_size;
@@ -410,10 +455,28 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
                 int window_y = window_begin_y;
 
                 // First loop calcuate coeff
-                tmp_array.resize(tmp_array.size() + coeff_per_pixel, 0.f);
+                const size_t new_size = tmp_array_size + coeff_per_pixel;
+                if (new_size > tmp_array_capacity)
+                {
+                    size_t new_capacity = tmp_array_capacity * (1.0 + (initial_growth_factor - 1.0)
+                        * (1.0 - static_cast<double>(max(0, static_cast<int>(base_clz - portable_clz(tmp_array_capacity)))) / 32.0));
+                    if (new_capacity < new_size)
+                        new_capacity = new_size;
+                    float* new_tmp = static_cast<float*>(aligned_malloc(new_capacity * sizeof(float), 64));
+                    if (!new_tmp)
+                    {
+                        aligned_free(tmp_array);
+                        throw "JincResize: failed to allocate new_tmp.";
+                    }
+                    memcpy(new_tmp, tmp_array, tmp_array_size * sizeof(float));
+                    aligned_free(tmp_array);
+                    tmp_array = new_tmp;
+                    tmp_array_capacity = new_capacity;
+                }
+                memset(tmp_array + tmp_array_size, 0, coeff_per_pixel * sizeof(float));
                 int curr_factor_ptr = tmp_array_top;
+                tmp_array_size = new_size;
 
-                const double radius2 = radius * radius;
                 for (int ly = 0; ly < filter_size; ++ly)
                 {
                     for (int lx = 0; lx < filter_size; ++lx)
@@ -466,10 +529,7 @@ static void generate_coeff_table_c(Lut* func, EWAPixelCoeff* out, int quantize_x
     }
 
     // Copy from tmp_array to real array
-    const int tmp_array_size = tmp_array.size();
-    out->factor = static_cast<float*>(aligned_malloc(tmp_array_size * sizeof(float), 64)); // aligned to cache line
-    if (out->factor)
-        memcpy(out->factor, &tmp_array[0], tmp_array_size * sizeof(float));
+    out->factor = tmp_array;
 }
 
 /* Planar resampling with coeff table */
@@ -608,7 +668,9 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
         Blur,
         Cplace,
         Threads,
-        Opt
+        Opt,
+        Initial_capacity,
+        Initial_factor
     };
 
     JincResize* d = reinterpret_cast<JincResize*>(new JincResize());
@@ -639,8 +701,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     if (quant_y < 1 || quant_y > 256)
         return set_error(clip, "JincResize: quant_y must be between 1..256.");
 
-    const bool has_at_least_v8 = avs_function_exists(env, "propShow");
-    d->has_at_least_v8 = has_at_least_v8;
+    d->has_at_least_v8 = avs_function_exists(env, "propShow");
 
     std::string cplace = avs_defined(avs_array_elt(args, Cplace)) ? avs_as_string(avs_array_elt(args, Cplace)) : "";
 
@@ -654,7 +715,7 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     }
     else
     {
-        if (has_at_least_v8)
+        if (d->has_at_least_v8)
         {
             AVS_VideoFrame* frame0 = avs_get_frame(clip, 0);
             const AVS_Map* props = avs_get_frame_props_ro(env, frame0);
@@ -711,8 +772,18 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     const int target_width = avs_as_int(avs_array_elt(args, Target_width));
     const int target_height = avs_as_int(avs_array_elt(args, Target_height));
 
+    const double initial_factor = avs_defined(avs_array_elt(args, Initial_factor)) ? avs_as_float(avs_array_elt(args, Initial_factor)) : 1.50;
+    if (initial_factor < 1.0)
+        return set_error(clip, "JincResize: initial_factor must be eqaul to or greater than 1.0.");
+
     const int src_width = vi->width;
     const int src_height = vi->height;
+
+    const int initial_capacity = avs_defined(avs_array_elt(args, Initial_capacity)) ? avs_as_int(avs_array_elt(args, Initial_capacity))
+        : max(target_width * target_height, src_width * src_height);
+    if (initial_capacity <= 0)
+        return set_error(clip, "JincResize: initial_capacity must be greater than 0.");
+
     vi->width = target_width;
     vi->height = target_height;
     d->peak = static_cast<float>((1 << avs_bits_per_component(vi)) - 1);
@@ -722,22 +793,37 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     d->init_lut->InitLut(samples, radius, blur);
     d->planecount = avs_num_components(vi);
     bool subsampled = false;
+    std::vector<EWAPixelCoeff*>* out = &d->out;
+    out->emplace_back(new EWAPixelCoeff());
+    generate_coeff_params params =
+    {
+        d->init_lut,
+        d->out[0],
+        quant_x,
+        quant_y,
+        samples,
+        src_width,
+        src_height,
+        target_width,
+        target_height,
+        radius,
+        crop_left,
+        crop_top,
+        crop_width,
+        crop_height,
+        initial_capacity,
+        initial_factor
+    };
 
     try
     {
         if (d->planecount > 1)
         {
             if (avs_is_444(vi) || avs_is_rgb(vi))
-            {
-                d->out.emplace_back(new EWAPixelCoeff());
-                generate_coeff_table_c(d->init_lut, d->out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
-                    radius, crop_left, crop_top, crop_width, crop_height);
-            }
+                generate_coeff_table_c(params);
             else
             {
-                std::vector<EWAPixelCoeff*>* out = &d->out;
-                for (int i = 0; i < 2; ++i)
-                    out->emplace_back(new EWAPixelCoeff());
+                out->emplace_back(new EWAPixelCoeff());
 
                 subsampled = true;
                 const int sub_w = avs_get_plane_width_subsampling(vi, AVS_PLANAR_U);
@@ -750,20 +836,32 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
                 const double crop_top_uv = (cplace == "topleft") ?
                     (0.5 * (1.0 - static_cast<double>(src_height) / target_height) + crop_top) / div_h : crop_top / div_h;
 
-                generate_coeff_table_c(d->init_lut, (*out)[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height,
-                    radius, crop_left, crop_top, crop_width, crop_height);
-                generate_coeff_table_c(d->init_lut, (*out)[1], quant_x, quant_y, samples, src_width >> sub_w, src_height >> sub_h,
-                    target_width >> sub_w, target_height >> sub_h, radius, crop_left_uv, crop_top_uv, crop_width / div_w, crop_height / div_h);
+                generate_coeff_table_c(params);
+                params = {
+                    d->init_lut,
+                    (*out)[1],
+                    quant_x,
+                    quant_y,
+                    samples,
+                    src_width >> sub_w,
+                    src_height >> sub_h,
+                    target_width >> sub_w,
+                    target_height >> sub_h,
+                    radius,
+                    crop_left_uv,
+                    crop_top_uv,
+                    crop_width / div_w,
+                    crop_height / div_h,
+                    initial_capacity / (static_cast<int>(div_w) * static_cast<int>(div_h)),
+                    initial_factor
+                };
+                generate_coeff_table_c(params);
             }
         }
         else
-        {
-            d->out.emplace_back(new EWAPixelCoeff());
-            generate_coeff_table_c(d->init_lut, d->out[0], quant_x, quant_y, samples, src_width, src_height, target_width, target_height, radius,
-                crop_left, crop_top, crop_width, crop_height);
-        }
+            generate_coeff_table_c(params);
     }
-    catch (const std::exception&)
+    catch (const std::exception& e)
     {
         std::vector<EWAPixelCoeff*>* out = &d->out;
         for (int i = 0; i < static_cast<int>(d->out.size()); ++i)
@@ -775,7 +873,21 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
         delete[] d->init_lut->lut;
         delete d->init_lut;
 
-        return set_error(clip, "JincResize: failed to allocate memory for coefficient buffer");
+        return set_error(clip, e.what());
+    }
+    catch (const char* e)
+    {
+        std::vector<EWAPixelCoeff*>* out = &d->out;
+        for (int i = 0; i < static_cast<int>(d->out.size()); ++i)
+        {
+            delete_coeff_table((*out)[i]);
+            delete (*out)[i];
+        }
+
+        delete[] d->init_lut->lut;
+        delete d->init_lut;
+
+        return set_error(clip, e);
     }
 
     const bool avx512 = (opt == 3);
@@ -939,7 +1051,9 @@ const char* AVSC_CC avisynth_c_plugin_init(AVS_ScriptEnvironment* env)
         "[blur]f"
         "[cplace]s"
         "[threads]i"
-        "[opt]i", Create_JincResize, 0);
+        "[opt]i"
+        "[initial_capacity]i"
+        "[initial_factor]f", Create_JincResize, 0);
     avs_add_function(env, "Jinc36Resize",
         "c"
         "i"
