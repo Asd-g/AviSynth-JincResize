@@ -1,3 +1,7 @@
+##### 2.1.4:
+    Added parameters `initial_capacity`, `initial_factor`.
+    Updated minimum AviSynth+ version to r3688.
+
 ##### 2.1.3:
     Fixed bug that can cause vertical lines.
     Reduced used memory (thanks DTL2020 for the ideas).

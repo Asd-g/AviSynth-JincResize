@@ -1,6 +1,6 @@
 #include <immintrin.h>
 
-#include "JincRessize.h"
+#include "JincResize.h"
 
 #if !defined(__AVX2__)
 #error "AVX2 option needed"

@@ -11,6 +11,7 @@ project(JincResize LANGUAGES CXX)
 add_library(JincResize SHARED)
 
 target_sources(JincResize PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/JincResize.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JincResize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/resize_plane_sse41.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/resize_plane_avx2.cpp
@@ -20,8 +21,6 @@ target_sources(JincResize PRIVATE
 if (WIN32)
     target_sources(JincResize PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/JincResize.rc)
 endif()
-
-target_include_directories(JincResize PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 if (UNIX)
     target_include_directories(JincResize PRIVATE

@@ -42,7 +42,6 @@ struct JincResize
     Lut* init_lut;
     std::vector<EWAPixelCoeff*> out;
     int planecount;
-    bool has_at_least_v8;
     float peak;
 
     template<typename T, int thr, int subsampled>

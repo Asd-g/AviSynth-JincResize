@@ -1,8 +1,8 @@
 #include <winver.h>
 
 1 VERSIONINFO
-FILEVERSION             2,1,3,0
-PRODUCTVERSION        	2,1,3,0
+FILEVERSION             2,1,4,0
+PRODUCTVERSION        	2,1,4,0
 FILEFLAGSMASK           VS_FFI_FILEFLAGSMASK
 FILETYPE                VFT_DLL
 BEGIN
@@ -11,12 +11,12 @@ BEGIN
         BLOCK "040904E4"
         BEGIN
         VALUE "Comments",         "Jinc (EWA Lanczos) resampling filter."
-        VALUE "FileDescription",  "JincResize for AviSynth 2.6 / AviSynth+"
-        VALUE "FileVersion",      "2.1.3"
+        VALUE "FileDescription",  "JincResize for AviSynth+"
+        VALUE "FileVersion",      "2.1.4"
         VALUE "InternalName",     "JincResize"
         VALUE "OriginalFilename", "JincResize.dll"
         VALUE "ProductName",      "JincResize"
-        VALUE "ProductVersion",   "2.1.3"
+        VALUE "ProductVersion",   "2.1.4"
         END
     END
     BLOCK "VarFileInfo"

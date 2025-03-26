@@ -1,6 +1,6 @@
 #include <smmintrin.h>
 
-#include "JincRessize.h"
+#include "JincResize.h"
 
 template <typename T, int thr, int subsampled>
 void JincResize::resize_plane_sse41(AVS_VideoFrame* src, AVS_VideoFrame* dst, AVS_VideoInfo* vi)

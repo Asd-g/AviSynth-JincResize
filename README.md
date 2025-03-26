@@ -10,7 +10,7 @@ NOTE: The 32-bit version is not supported. If you still want to use it keep in m
 
 ### Requirements:
 
-- AviSynth 2.60 / AviSynth+ 3.4 or later
+- AviSynth+ r3688 or later ([1](https://github.com/AviSynth/AviSynthPlus/releases) / [2](https://forum.doom9.org/showthread.php?t=181351) / [3](https://gitlab.com/uvz/AviSynthPlus-Builds))
 
 - Microsoft VisualC++ Redistributable Package 2022 (can be downloaded from [here](https://github.com/abbodi1406/vcredist/releases))
 
@@ -121,7 +121,7 @@ Requirements:
 ```
 
 ```
-git clone https://github.com/Asd-g/AviSynth-JincResize && <br>
+git clone https://github.com/Asd-g/AviSynth-JincResize && \
 cd AviSynth-JincResize
 cmake -B build -G Ninja
 ninja -C build

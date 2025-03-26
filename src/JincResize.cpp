@@ -1,7 +1,7 @@
 #include <cmath>
 #include <cstring>
 
-#include "JincRessize.h"
+#include "JincResize.h"
 
 AVS_FORCEINLINE void* aligned_malloc(size_t size, size_t align)
 {
@@ -610,11 +610,11 @@ static AVS_VideoFrame* AVSC_CC JincResize_GetFrame(AVS_FilterInfo* fi, int n)
     if (!src)
         return nullptr;
 
-    AVS_VideoFrame* dst = (d->has_at_least_v8) ? avs_new_video_frame_p(env, vi, src) : avs_new_video_frame(env, vi);
+    AVS_VideoFrame* dst = avs_new_video_frame_p(env, vi, src);
 
     (d->*d->process_frame)(src, dst, vi);
 
-    if (d->has_at_least_v8 && (avs_is_420(vi) || avs_is_422(vi) || avs_is_yv411(vi)))
+    if ((avs_is_420(vi) || avs_is_422(vi) || avs_is_yv411(vi)))
     {
         if (d->cplace == "mpeg2")
             avs_prop_set_int(env, avs_get_frame_props_rw(env, dst), "_ChromaLocation", 0, 0);
@@ -686,6 +686,17 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
         return avs_new_value_error(msg);
     };
 
+    if (!avs_check_version(env, 9))
+    {
+        if (avs_check_version(env, 10))
+        {
+            if (avs_get_env_property(env, AVS_AEP_INTERFACE_BUGFIX) < 2)
+                return set_error(clip, "JincResize: AviSynth+ version must be r3688 or later.");
+        }
+    }
+    else
+        return set_error(clip, "JincResize: AviSynth+ version must be r3688 or later.");
+
     if (!avs_is_planar(vi))
         return set_error(clip, "JincResize: clip must be in planar format.");
 
@@ -701,8 +712,6 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     if (quant_y < 1 || quant_y > 256)
         return set_error(clip, "JincResize: quant_y must be between 1..256.");
 
-    d->has_at_least_v8 = avs_function_exists(env, "propShow");
-
     std::string cplace = avs_defined(avs_array_elt(args, Cplace)) ? avs_as_string(avs_array_elt(args, Cplace)) : "";
 
     if (!cplace.empty())
@@ -715,23 +724,18 @@ static AVS_Value AVSC_CC Create_JincResize(AVS_ScriptEnvironment* env, AVS_Value
     }
     else
     {
-        if (d->has_at_least_v8)
-        {
-            AVS_VideoFrame* frame0 = avs_get_frame(clip, 0);
-            const AVS_Map* props = avs_get_frame_props_ro(env, frame0);
+        AVS_VideoFrame* frame0 = avs_get_frame(clip, 0);
+        const AVS_Map* props = avs_get_frame_props_ro(env, frame0);
 
-            if (avs_prop_get_type(env, props, "_ChromaLocation") == 'i')
+        if (avs_prop_get_type(env, props, "_ChromaLocation") == 'i')
+        {
+            switch (avs_prop_get_int(env, props, "_ChromaLocation", 0, nullptr))
             {
-                switch (avs_prop_get_int(env, props, "_ChromaLocation", 0, nullptr))
-                {
-                    case 0: cplace = "mpeg2"; break;
-                    case 1: cplace = "mpeg1"; break;
-                    case 2: cplace = "topleft"; break;
-                    default: return set_error(clip, "JincResize: invalid _ChromaLocation"); break;
-                }
+                case 0: cplace = "mpeg2"; break;
+                case 1: cplace = "mpeg1"; break;
+                case 2: cplace = "topleft"; break;
+                default: return set_error(clip, "JincResize: invalid _ChromaLocation"); break;
             }
-            else
-                cplace = "mpeg2";
         }
         else
             cplace = "mpeg2";

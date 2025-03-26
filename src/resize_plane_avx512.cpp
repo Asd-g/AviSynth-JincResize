@@ -1,6 +1,6 @@
 #include <immintrin.h>
 
-#include "JincRessize.h"
+#include "JincResize.h"
 
 #if !defined(__AVX512F__ ) && !defined(__INTEL_COMPILER)
 #error "AVX512 option needed"
